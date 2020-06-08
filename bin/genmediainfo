@@ -1,0 +1,29 @@
+#!/bin/bash
+# usage: $0 [volPrefix]
+# volPrefix = prefix of the collection (eg anime, movie, collection, etc)
+
+volPrefix=${1:-anime}
+mifodb=${2:-$HOME/$volPrefix/catalog/mifo}
+
+[ ! -x "$(which mediainfo)" ] && {
+    echo ERROR: package mediainfo required
+    exit 1
+}
+
+[ -d "$mifodb" ] || {
+    echo "ERROR: $mifodb does not exist"
+    exit 1
+}
+
+echo "Generating mifo files to $mifodb"
+for volName in ${volPrefix}*; do
+    find $volName -type d -exec mkdir -p "$mifodb"/'{}' \;
+    find $volName -type f | while read fname; do
+        egrep -iv 'text|Parity' <(file "$fname" | cut -f2- -d:) > /dev/null && {
+            mediainfo "$fname" > "$mifodb"/"$fname".mifo || {
+                echo "FAILED: $fname"
+                rm "$mifodb"/"$fname".mifo
+            }
+        }
+    done
+done

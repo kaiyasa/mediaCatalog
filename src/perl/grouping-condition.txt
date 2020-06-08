@@ -1,0 +1,63 @@
+
+CREATE TABLE condition (
+    condId INTEGER PRIMARY KEY, name VARCHAR2,
+    description VARCHAR2
+);
+
+CREATE TABLE group_condition (
+    grpCondId INTEGER PRIMARY KEY,
+    condId INTEGER,
+    grpId INTEGER		/* grp.grpId */
+);
+
+CREATE TABLE group_condition_info (
+    grpCondId INTEGER,
+    colIdType INTEGER,
+    colIdValue INTEGER		/* value of animeId, epId, etc */
+);
+
+CREATE TABLE group_condition_id_type (
+    colIdType INTEGER PRIMARY KEY,
+    colIdName VARCHAR2		/* e.g. animeId, epId, etc */
+);
+
+
+INSERT INTO condition (name, description)
+    VALUES ("DEAD", "group has disbanded");
+
+-- needs animeId
+INSERT INTO condition (name, description)
+    VALUES ("VERIFIED-COMPLETE", "researched and is complete (via groups?)");
+
+-- needs epId
+INSERT INTO condition (name, description)
+    VALUES ("MISSING-EP", "group never released this episode");
+
+-- needs fileId, epIds
+INSERT INTO condition (name, description)
+    VALUES ("MULTI-EP-FILE", "group released 2+ episodes in a file");
+
+-- needs epId, fileIds
+INSERT INTO condition (name, description)
+    VALUES ("MULTI-FILE-EP", "group released 2+ files in an episode/movie");
+
+
+-- samples of adding
+INSERT INTO group_condition (condId, grpId)
+    VALUES (condIdOf("DEAD"), $grpId);
+
+-- adding verified
+grpCondId=INSERT INTO group_condition (condId, grpId)
+                VALUES (condIdOf("VERIFIED-COMPLETE"), $grpId));
+INSERT INTO group_condition_info (grpCondId, colIdType, colIdValue)
+      VALUES (condIdOf($grpCondId, colIdTypeOf("animeId"), $animeId);
+
+-- selecting verified (get grpId and animeId)
+  SELECT gc.grpId as grpId, gcAnime.colIdValue as animeId
+    FROM condition c, group_condition gc,
+         group_condition_info gcAnime, group_condition_id_type gci
+   WHERE gc.grpCondId = gcAnime.grpCondId
+         AND gcAnime.colIdType = gci.colIdType
+         AND gci.colIdName = 'animeId'
+         AND c.condId = gc.condId
+         AND c.condName = 'VERIFIED-COMPLETE'

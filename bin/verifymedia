@@ -1,0 +1,207 @@
+#!/bin/bash
+# usage: $0 rootdir [iso size md5]
+# rootdir: root directory of media to verify (e.g. /media/cdrom)
+# iso:     iso mode (implies no .volume in $rootdir, size & md5 are passed instead to check raw)
+# size:    total used size of the media (assumed to be multiple of 2048)
+# md5:     md5 hash of entire media (raw)
+
+# DEBUG - these are stubs to help debug script flow
+dd() {
+    echo dd $*
+}
+jacksum() {
+    echo jacksum $*
+}
+md5sum() {
+    echo md5sum $*
+}
+# DEBUG - uncomment the following line to turn off debug mode
+unset dd jacksum md5sum
+
+usage() {
+    echo "usage: $0 rootdir [iso size md5]"
+    echo "    rootdir: root directory of media to verify (e.g. /media/cdrom)"
+    echo "    iso:     iso mode (implies no .volume in rootdir, size & md5 are passed instead to check raw)"
+    echo "    size:    total used size of the media (assumed to be multiple of 2048)"
+    echo "    md5:     md5 hash of entire media (raw)"
+}
+
+check_md5() {
+    local md5=$1
+    local fn=$2
+
+    jacksum -a md5 -e "$md5" "$fn" > /dev/null
+}
+
+check() {
+    local flag=$1
+    local md5=$2
+    local fn=$3
+
+    local h
+    if [ "$flag" = '1' ]; then
+        h=$(jacksum -X -a crc32+md5+ed2k -F "CRC32=#CHECKSUM{0} MD5=#CHECKSUM{1} ed2k=#CHECKSUM{2}" <(cat "$fn".[0-9][0-9]))
+    else
+        h=$(jacksum -X -a crc32+md5+ed2k -F "CRC32=#CHECKSUM{0} MD5=#CHECKSUM{1} ed2k=#CHECKSUM{2}" "$fn")
+    fi
+    [ "$md5" = "$(getmd5 $h)" ]
+}
+
+getmd5() {
+    while [ $# -gt 0 ]; do
+        local n=$(echo $1 | cut -d= -f1)
+        local v=$(echo $1 | cut -d= -f2)
+
+        if [ "$n" = "MD5" ]; then
+            echo "$v"
+            return 0
+        fi
+        shift
+    done
+}
+
+getKeyValue() {
+    local kv=$(echo $2 | sed 's/MD5-16k/MDS_16k/')
+    local name=$1
+    local $kv
+
+    echo "${!name}"
+}
+
+verify_summary() {
+    local val=0
+    local base=$2
+
+    while read line; do
+        local fn=$(echo "$line" | cut -c35-)
+        local hashes=$(echo "$line" | cut -c1-32)
+
+        if [ ! -f "$base/$fn" ]; then
+            echo "     MISSING: $fn"
+            continue
+        fi
+
+        echo -n "    CHECKING: $fn"
+        if check_md5 $hashes "$base/$fn"; then
+            echo -ne "\r      PASSED: "
+        else
+            echo -ne "\r    MISMATCH: "
+            val=1
+        fi
+        echo "$fn"
+    done < "$1"
+    return $val
+}
+
+verify_vcatalog() {
+    local val=0
+    local base=$2
+
+    while read line; do
+        local fn=$(echo "$line" | cut -d\| -f5)
+        local hashes=$(echo "$line" | cut -d\| -f3)
+        local splitFlag=$(getKeyValue split "$hashes")
+        local tfn="$fn"
+
+        if [ "$splitFlag" = '1' ]; then
+            tfn="$fn.00"
+        fi
+
+        if [ ! -f "$base/$tfn" ]; then
+            echo "     MISSING: $fn"
+            continue
+        fi
+
+        echo -n "    CHECKING: $fn"
+        if check "$splitFlag" $(getmd5 $hashes) "$base/$fn"; then
+            echo -ne "\r      PASSED: "
+        else
+            echo -ne "\r    MISMATCH: "
+            val=1
+        fi
+        echo "$fn"
+    done < "$1"
+    return $val
+}
+
+synth_vcatalog() {
+    local i
+
+    for i in "$@"; do
+        echo "$(cat "$i")$(basename "$i" .ver)"
+    done
+}
+
+isoMode=$(echo "$2" | tr A-Z a-z)
+isoSize=$3
+isoMd5=$(echo "$4" | tr A-Z a-z)
+
+rootdir=${1:-.}
+
+[ -z "$rootdir" ] && {
+    usage
+    exit 1
+}
+
+rc=0
+if [ "iso" = "$isoMode" ] ; then
+    [ -z "$isoMd5" ] && {
+        usage
+        exit 1
+    }
+    [ ! -r "$rootdir" ] && {
+        echo "ERROR: unable to read from '$rootdir'"
+        exit 1
+    }
+
+    echo "Verify of media '$rootdir'"
+    echo
+    echo -e "\r    CHECKING: $isoSize bytes ($((isoSize/2048)) x 2k records)"
+
+    read mediaMd5 junk < <(dd if=$rootdir bs=2k count=$((isoSize/2048)) | md5sum)
+    if [ "$isoMd5" = "$mediaMd5" ] ; then
+        echo -ne "\r      PASSED: expected $isoMd5 and got $mediaMd5: "
+    else
+        echo -ne "\r      FAILED: expected $isoMd5 but got $mediaMd5: "
+        rc=1
+    fi
+    echo "'$rootdir'"
+
+    [ -r "$rootdir" ] && {
+      echo "Verify done for media '$rootdir'"
+    }
+else
+    [ -f "$rootdir/.volume" ] && {
+        echo Verify of media $(cat "$1/.volume")
+    }
+
+    while read base; do
+        fname="$base/.vcatalog"
+        sname="$base/.summary"
+        if [ -s "$fname" ]; then
+            echo "Checking $base"
+            verify_vcatalog "$base/.vcatalog" "$base" || rc=$?
+            continue
+        fi
+        if [ -s "$sname" ]; then
+            echo "Checking (summary) $base"
+            verify_summary "$base/.summary" "$base" || rc=$?
+            continue
+        fi
+        if [ $(find "$base" -maxdepth 1 -name '*.ver'  | wc -l) -gt 0 ]; then
+            echo "Checking $base (synth)"
+            verify_vcatalog <(synth_vcatalog "$base"/*.ver) "$base" || rc=$?
+            continue
+        fi
+    done < <( find "$rootdir" -type d )
+
+    [ -f "$rootdir/.volume" ] && {
+      echo Verify done for media $(cat "$1/.volume")
+    }
+fi
+
+[ $rc -ne 0 ] && {
+    echo "WARNING: errors encountered."
+}
+
+exit $rc

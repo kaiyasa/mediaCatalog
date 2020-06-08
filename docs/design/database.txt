@@ -1,0 +1,47 @@
+
+General goals
+* description of media collections
+* file description
+* show description
+* episode description (linkage to show)
+* encoder group description
+* linkage of files to encoder group and episode
+
+
+List of attributes to track
+---------------------------
+filename
+filesize
+filedate
+filelength
+file mediainfo
+file hashes (crc, md5, ed2k, maybe others? like sha256)
+media collection/name
+media id
+media dir
+show id
+show names (yep, I want english, romanji, kana/kanji :)
+episode id
+episode name
+
+
+   
+   media collection  <-- disk info  <-- dir info
+   ----------------      ---------      --------
+    name                  mediaId        id  
+                                         name
+
+                                         *|
+                                          |
+                                          |*
+                                           
+                                        media file
+                                        ----------
+                                         id
+                                         name
+                                         size
+                                         date
+                                         hashes
+
+
+

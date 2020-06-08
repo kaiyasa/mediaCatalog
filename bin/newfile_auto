@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# put this script in a screen or some background processing
+newfile_notify | newfile_process

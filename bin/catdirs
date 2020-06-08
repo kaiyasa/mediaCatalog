@@ -1,0 +1,32 @@
+#!/bin/bash
+
+usage() {
+    echo "usage: $0 <prefix>"
+}
+
+prefix=${1}
+[ -z "$prefix" ] && {
+    usage
+    exit 1
+}
+
+echo using prefix $prefix
+
+for i in ${prefix}???? v-${prefix}????; do
+    (
+        cd "$i" && {
+            rm .volume .vcatalog
+            for o in *; do
+                [ -d "$o" ] && {
+                    if [ -d "../$o" ]; then
+                        mv -iv --reply=no "$o"/* "../$o/"
+                        rmdir "$o"
+                    else
+                        mv -iv --reply=no "$o" ../
+                    fi
+                }
+            done
+        }
+    )
+    rmdir "$i"
+done

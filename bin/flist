@@ -1,0 +1,17 @@
+#!/bin/bash
+# usage: $0 <search> [file]
+
+usage() {
+    echo "usage: $0 <search> [file]"
+}
+
+[ -z "$1" ] && {
+    usage
+    exit 1
+}
+
+search=$1
+file=${2:-~dminer/Documents/video/anime/animedb.xml}
+
+echo "Searching file ($file)..."
+grep -i "$search" "$file"

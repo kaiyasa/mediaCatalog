@@ -1,0 +1,67 @@
+#!/bin/bash
+# usage: $0 pardb
+#   pardb = location of parity db
+
+pardb="${1:-/home/dminer/bulk/anime/pardb}"
+pardb="${1:-/media/sdb1/anime/pardb}"
+base="$(pwd)"
+
+[ -d "$pardb" ] || {
+    echo "Directory does not exist: $pardb"
+    exit 1
+}
+
+#
+# The idea is to tune par2's block size to ensure a minimum of 1000
+# source blocks per archive set.  Thus, a 10% recovery will result
+# in 100 recovery blocks. Unfortunately, there is a point where this is
+# impossible without generating more parity data than there is source
+# data.  By having 100 recovery blocks or more, you can have a rapidly
+# degrading medium and still have a good chance of recovery.
+#
+# size is in units of KB
+getBlockSize() {
+    local size=$1
+    local MB=$(expr 1024 \* 1024)
+    local blkSize=0
+
+    # try to scale the number of blocks to number of MBs
+    # there are in the archive set, but have 100 'recovery blocks'
+    # at a minimum.
+    local count=$(expr $size / $MB)
+    if [ $count -lt 1000 ]; then
+        count=1000
+    fi
+    blkSize=$(expr $size / $count)
+
+    # round to 2KB boundary
+    blkSize=$(expr $blkSize / 2 \* 2)
+
+    # cap the 'source block' size
+    if [ $blkSize -gt 1024 ]; then
+        blkSize=1024
+    elif [ $blkSize -lt 2 ]; then
+        blkSize=2
+    fi
+    echo $blkSize
+}
+
+while read volName dir; do
+    dest="$pardb/$volName/$dir"
+    src="$base/$volName/$dir"
+    [ -d "$dest" ] || mkdir -p "$dest" && {
+        size=$(du -ksL "$src" | cut -f1)
+        parBlkSize=$(expr $(getBlockSize $size) \* 1024)
+
+        # oh no, too little data- jack up the recovery percent
+        rpercent=10
+        if [ $size -lt 64 ]; then
+            rpercent=80
+        elif [ $size -lt 512 ]; then
+            rpercent=20
+        fi
+
+        echo "Processing $volName/$dir with $parBlkSize"
+        cd "$dest" && par2create -s$parBlkSize -u -r$rpercent repairdb.par2 "$src/.vcatalog" "$src"/*
+    }
+done

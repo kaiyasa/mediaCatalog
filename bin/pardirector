@@ -1,0 +1,158 @@
+#!/bin/bash
+
+usage() {
+	echo "usage: $(basename "$0") pardb_collection media_collection"
+	echo "pardb_collection = location of par container dirs (each with repairdb.par2)"
+	echo "media_collection = location of media container dirs to search for matching files"
+	echo "REQUIRES: basename cut dirname egrep find head ls mkdir mv par2ls sed sort tail uniq"
+}
+
+verifyParms() {
+	# parms 1 & 2 will be the par & media collection dirs
+	for dir in "$1" "$2" ; do
+		[ ! -d "$dir" ] && {
+			echo "'$dir'" not found
+			return 1
+		}
+	done
+	for util in basename cut dirname egrep find head ls mkdir mv par2ls sed sort tail uniq ; do
+		[ -z "$(which $util)" ] && {
+			echo "$util not found"
+			return 1
+		}
+	done
+	return 0
+}
+
+checkOrAddDirs() {
+	for dir in "$@" ; do
+		[ ! -d "$dir" ] && {
+			mkdir "$dir" || return
+		}
+	done
+	return 0
+}
+
+getParContainerList() {
+	for dir in "$@" ; do
+		find "$dir" -type f -iname "repairdb.par2" -exec dirname '{}' \;
+	done
+	return
+}
+
+getMediaContainerList() {
+	local myMediaCollection=$1
+	# don't really have something specific to look for, so .vcatalog will have to do
+	find "$myMediaCollection" -type f -iname ".vcatalog" -exec dirname '{}' \; |
+		sort |
+		uniq
+	return
+}
+
+getParFileList() {
+	local myParContainer=$1
+
+	echo "$myParContainer"
+	par2ls -v "$myParContainer/repairdb.par2" 2>/dev/null |
+		egrep "name=" |
+		cut -d= -f2- |
+		egrep -v .vcatalog |
+		sort
+	return
+}
+
+[ "$#" != 2 ] && {
+	usage
+	exit 1
+}
+
+getMediaFileListFor() {
+	local myParList=$1
+	local myMediaCollection=$2
+	local searchFile=$(head -n 2 <<<"$myParList" |
+		tail -n 1 |
+		sed 's/\([][?*]\)/\\\1/g')
+	local mediaDir=$(find "$myMediaCollection" -iname "$searchFile" -exec dirname '{}' \; |
+		head -n 1)
+	[ -z "$mediaDir" ] && return
+	echo "$mediaDir"
+	ls -A "$mediaDir" |
+		egrep -v ".vcatalog" |
+		sort
+	return
+}
+
+compareFileListsAndMove() {
+	local myParList=$(tail -n +2 <<<"$1")
+	local myMediaList=$(tail -n +2 <<<"$2")
+	local myCompleteDir=$3
+	local myNoMatchDir=$4
+	local myRejectDir=$5
+	local myParFile=$(head -n 1 <<<"$myParList")
+	local myParDir=$(head -n 1 <<<"$1")
+	local myMediaFile=$(head -n 1 <<<"$myMediaList")
+	local myMediaDir=$(head -n 1 <<<"$2")
+
+	[ -z "$myMediaList" ] && {
+		mv -vi "$myParDir" "$myNoMatchDir/" < /dev/tty
+		return
+	}
+	[ "$myParList" != "$myMediaList" ] && {
+		mv -vi "$myParDir" "$myRejectDir/" < /dev/tty
+		return
+	}
+	mv -vi "$myParDir" "$myCompleteDir/$(basename "$myMediaDir")" < /dev/tty
+	return
+}
+
+compareContainerListsAndFlagMissing() {
+	local myMediaContainerList=$1
+	local myParContainerList=$2
+	local myNoMatchDir=$3
+
+	local myMediaList=$(
+		while read mediaContainer ; do
+			basename "$mediaContainer"
+		done <<<"$myMediaContainerList")
+	local myParList=$(
+		while read parContainer ; do
+			basename "$parContainer"
+		done <<<"$myParContainerList")
+
+	local myNoMatchList=$(sort <(echo "$myMediaList" ; echo "$myParList") |
+		uniq -c |
+		egrep -v "^[ \t]*2[ \t]")
+	while read junk noMatchDir ; do
+		[ ! -d "$myNoMatchDir/$noMatchDir" ] && mkdir "$myNoMatchDir/$noMatchDir"
+	done <<<"$myNoMatchList"
+}
+
+### EDITABLE - begin ###
+complete="complete"
+noMatch="nomatch"
+reject="rejected"
+### EDITABLE - end ###
+
+pardbCollection="$1"
+mediaCollection="$2"
+
+completeDir="$(dirname "$parContainer")/$complete"
+noMatchDir="$(dirname "$parContainer")/$noMatch"
+rejectDir="$(dirname "$parContainer")/$reject"
+
+verifyParms "$pardbCollection" "$mediaCollection" || {
+	usage
+	exit 1
+}
+checkOrAddDirs "$completeDir" "$noMatchDir" "$rejectDir" || exit 1
+
+parContainerList=$(getParContainerList "$pardbCollection")
+while read parContainer ; do
+	parList=$(getParFileList "$parContainer")
+	mediaList=$(getMediaFileListFor "$parList" "$mediaCollection")
+	compareFileListsAndMove "$parList" "$mediaList" "$completeDir" "$noMatchDir" "$rejectDir"
+done <<<"$parContainerList"
+
+parContainerList=$(getParContainerList "$completeDir")
+mediaContainerList=$(getMediaContainerList "$mediaCollection")
+compareContainerListsAndFlagMissing "$mediaContainerList" "$parContainerList" "$noMatchDir"

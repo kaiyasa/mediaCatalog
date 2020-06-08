@@ -1,0 +1,42 @@
+-- starting point for anime eps count by group
+
+sample output
+name                                 group            eps  tot  status
+-----------------------------------  ---------------  ---  ---  ----------
+.hack//SIGN                          a4e              5    26   ongoing
+11eyes                               TMD              1    12   ongoing
+11eyes                               HorribleSubs     3    12   ongoing
+11eyes                               SFW              7    12   ongoing
+11eyes                               Fubuki           7    12   ongoing
+11eyes                               Shinji-Nekomimi  2    12   ongoing
+15 Bishoujo Hyouryuuki               NSFW             1    0    ongoing
+AIKa Zero                            Mamiko           1    0    ongoing
+Aa! Megami-sama: Tatakau Tsubasa     niizk            2    2    complete
+Air Master                           AniMecha         12   27   ongoing
+Akiba-chan                           Toki-DATS        10   10   complete
+
+sqlite
+.headers on
+.mode column
+.width 35 15 3 3 10
+
+  SELECT animenameromaji AS name, grpshortname AS 'group', eps,
+         animeeptotal AS total,
+         (CASE
+              WHEN eps = animeeptotal THEN 'complete'
+              WHEN eps < animeeptotal THEN 'ongoing'
+              WHEN eps > animeeptotal AND animeeptotal > 0 THEN 'WHAT'
+              WHEN eps > animeeptotal AND animeeptotal = 0 THEN 'ongoing'
+          END) AS status
+    FROM anime a, grp g,
+         (  SELECT m.animeid AS animeid, m.grpid AS grpid,
+                   count(DISTINCT e.epsequence) AS eps
+              FROM mediafile m, episode e
+             WHERE e.epid = m.epid
+                   AND e.animeid = m.animeid
+                   AND e.epsequence NOT LIKE '%s%'
+          GROUP BY m.animeid, m.grpid
+         ) stats
+   WHERE a.animeid = stats.animeid
+         AND g.grpid = stats.grpid
+ORDER BY name;

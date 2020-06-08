@@ -1,0 +1,19 @@
+#!/bin/bash
+
+getHash() {
+    local hashes
+    local name value
+
+    IFS="|" read j j hashes size j < <(cat "$f")
+    echo "$size"
+    while IFS="=" read name value; do
+        [ "$name" = 'ed2k' ] && echo "$value"
+    done < <(echo $hashes | sed 's/ /\n/g')
+}
+
+
+for f in "$@"; do
+    info=$(getHash "$f")
+    fn=$(basename "$f" .ver)
+    printf "ed2k://|file|%s|%s|%s|/\n" "$fn" $info
+done

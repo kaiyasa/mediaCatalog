@@ -1,0 +1,150 @@
+#!/bin/bash
+
+print() {
+    echo "$@" > /dev/tty
+}
+
+getVerifyHash() {
+    local hash=$1
+    local verify=$2
+    local hashes=$(echo "$2" | cut -d\| -f3)
+    set -- $hashes
+    local nr=$#
+
+    while [ $nr -gt 0 ]; do
+        local name=$(echo $1 | cut -d= -f1)
+        if [ "$hash" = "$name" ]; then
+            echo $1 | cut -d= -f2
+            return 0
+        fi
+        shift
+        ((--nr))
+    done
+    echo NONE
+    return 1
+}
+
+setVerifyHash() {
+    local hash=$1
+    local value=$2
+    local verify=$3
+
+    local hashes
+    local found=0
+
+    set -- $(echo "$verify" | cut -d\| -f3)
+    local nr=$#
+
+    while [ $nr -gt 0 ]; do
+        local name=$(echo $1 | cut -d= -f1)
+        if [ "$hash" = "$name" ]; then
+            hashes="$hashes ${hash}=$value"
+            found=1
+        else
+            hashes="$hashes $1"
+        fi
+        ((--nr))
+        shift
+    done
+    if [ $found -eq 0 ]; then
+       hashes="$hashes ${hash}=$value"
+    fi
+
+    local tstamp=$(echo "$verify" | cut -d\| -f2)
+    local fsize=$(echo "$verify" | cut -d\| -f4)
+    echo "v=1|$tstamp|"${hashes}"|$fsize"
+}
+
+
+doUnknownStatus() {
+    echo "filedirector: Unknown status type $1: filename=$2" > /dev/tty
+}
+
+getTargetDir() {
+    echo ${verifiedDir}
+}
+
+makeDir() {
+    local dir="$1"
+    [ -d "$dir" ] || {
+        mkdir -p "$dir" || {
+            return 1
+        }
+    }
+    return 0
+}
+
+stemMove() {
+    local fn="$1"
+    local dfn="$2"
+    local sfn=$(rev <<<"$fn" | cut -d. -f2- | rev)
+    local sdfn=$(rev <<<"$dfn" | cut -d. -f2- | rev)
+
+    # defang the globbing on the filename's stem
+    [ -f "$fn" ] || return 1;
+    [ -n "$sfn" ] || return 1;
+    [ "$sfn" = "$fn" ] && return 1;
+
+    local f ext
+    for f in "$sfn"*; do
+        ext=${f:${#sfn}}
+        mv "$f" "${sdfn}${ext}"
+    done
+}
+
+doMatchFile() {
+    local fn="$1"
+
+    local verify=$(cat "$fn.ver")
+    local targetDir=$(getTargetDir "$fn" "$verify")
+
+    makeDir "$targetDir" || continue
+
+    local bfn=$(basename "$fn")
+    if [ ! -f "$targetDir/$bfn" ]; then
+        stemMove "$fn" "$targetDir/$bfn" || {
+            print "ERROR: unable to move files to $targetDir"
+        }
+    else
+        print "DUPLICATE: "$(basename "$targetDir")"/$targetDir"
+        stemMove "$fn" "$dupDir/$bfn" || {
+            print "ERROR: unable to move files to $dupDir"
+        }
+    fi
+
+}
+
+doMismatchFile() {
+    local fn="$1"
+    local targetDir=${mismatchDir:=failed}
+
+    makeDir "$targetDir" || continue
+
+    stemMove "$fn" "$targetDir/$(basename "$fn")" || {
+        print "ERROR: unable to move files to $targetDir"
+    }
+}
+
+doUnknownFile() {
+    print "Skipped file: unknown CRC - $1"
+}
+
+main() {
+    local stat
+    local filename
+    local crcs
+
+    while IFS="|" read stat filename crcs; do
+        case "$stat" in
+            MATCH) doMatchFile "$filename";;
+            MISMATCH) doMismatchFile "$filename";;
+            UNKNOWN) doUnknownFile "$filename";;
+            *) doUnknownStatus "$stat" "$filename";;
+        esac
+    done
+}
+
+print "Config"
+print "  verified = ${verifiedDir:=verified}"
+print "duplicates = ${dupDir:=dups}"
+main

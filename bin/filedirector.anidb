@@ -1,0 +1,551 @@
+#!/bin/bash
+#
+# note: potential replacement for when no .ver exists
+# jacksum -X -a crc32+md5+ed2k -F "CRC32=#CHECKSUM{0} MD5=#CHECKSUM{1} ed2k=#CHECKSUM{2}"
+
+print() {
+    echo "$@" > /dev/tty
+}
+
+print "Config"
+print "  jacksum     = ${jacksum_jar:=/usr/local/jacksum/jacksum.jar}"
+print "  verified    = ${verifiedDir:=verified}"
+print "  database    = ${dbDir:=db}"
+[ -d "$dbDir" ] || mkdir -p "$dbDir"
+print "duplicates    = ${dupDir:=dups}"
+[ -d "$dupDir" ] || mkdir -p "$dupDir"
+print "sorted dir    = ${stage1Dir:=1stage}"
+[ -d "$stage1Dir" ] || mkdir -p "$stage1Dir"
+print "failed dir    = ${failedDir:=failed}"
+print "anidb client  = "${anidbUDPClient:="java -jar anidbClient.jar"}
+print "anidb connect = "${anidbConnect:="api.anidb.info 9000 45678"}
+SESSION_FILE="$HOME/tmp/anidb-session.txt"
+SCHED_FILE="$HOME/tmp/anidb-sched.txt"
+user=anidb_user
+passwd=anidb_password
+
+aniFilesDb=$dbDir/ani-files.txt
+[ -f "$aniFilesDb" ] || touch "$aniFilesDb"
+
+aniAnimeDb=$dbDir/ani-animes.txt
+[ -f "$aniAnimeDb" ] || touch "$aniAnimeDb"
+
+aniGroupDb=$dbDir/ani-groups.txt
+[ -f "$aniGroupDb" ] || touch "$aniGroupDb"
+
+anidbThrottle=30
+anidbNextTime=0
+
+
+anidb:getReturnCode() {
+    echo "${1:0:3}"
+}
+
+anidb:login() {
+    local $(anidb:getSession)
+    local protover=3
+
+    [ -n "$s" ] && return 0
+
+    local client="kenokitools"
+    local clientver="001"
+    local parms="user=${user}&pass=${passwd}&protover=${protover}&client=${client}&clientver=${clientver}"
+    local i
+
+    # retry logic
+    for i in {5..1}; do
+        local reply=$($anidbUDPClient $anidbConnect "AUTH $parms")
+        local code=$(anidb:getReturnCode "$reply")
+
+        case "${code:=0}" in
+            399);; 602);;
+            *) break;;
+        esac
+
+        local t
+        for t in {30..1}; do
+            print -ne "   Login retry $i in ${t}s: $reply  \r"
+            sleep 1
+        done
+        print  $(echo "   Login retry $i in ${t}s: $reply   " | tr '[:print:]' ' ')
+    done
+
+    if [ "${code:=0}" -ne 200 -a "$code" -ne 201 ]; then
+        print "Login failed: $reply"
+        return 1
+    fi
+    print -e "\nLogged into AniDB\n"
+
+    # parse the session ID
+    local junk
+    local s
+    local ANIDB_LOGGED_IN=yes
+    read junk s junk < <(echo "$reply")
+    anidb:setSession
+}
+
+anidb:logoff() {
+    local $(anidb:getSession)
+
+    if [ "$ANIDB_LOGGED_IN" = "yes" ]; then
+        # schedule the throttling for 2 seconds from now
+        echo $(expr $(date +%s) + 2) > "${SCHED_FILE}"
+
+        print -e "\nLogging off"
+        reply=$(anidb:sendRequest "LOGOUT " noargs) && {
+            echo "$reply"
+            cat "$SESSION_FILE" | tail -1
+            rm "$SESSION_FILE"
+            rm "$SCHED_FILE"
+        }
+    fi
+}
+
+anidb:getSession() {
+    if [ -f "$SESSION_FILE" ]; then
+        cat "$SESSION_FILE"
+    fi
+}
+
+anidb:setSession() {
+    echo "ANIDB_LOGGED_IN=$ANIDB_LOGGED_IN" > "$SESSION_FILE"
+    echo "s=$s" >> "$SESSION_FILE"
+}
+
+anidb:sendRequest() {
+    local parms=$1
+    local apFlag=$2
+
+    anidb:login && {
+        local $(anidb:getSession)
+        local time=$(date +%s)
+       
+        anidbNextTime=$(cat "${SCHED_FILE:-/}" 2> /dev/null || echo 0)
+        if [ $anidbNextTime -gt $time ]; then
+            local i
+            local msg
+            for i in $(seq $(expr $anidbNextTime - $time) -1 1); do
+                msg="   $(progress $fileCount $i) - Throttling anidb for $i seconds \r"
+                print -ne "$msg"
+                sleep 1
+            done
+            print "$(printf "% ${#msg}s " " ")"
+        fi
+
+        local vsep=''
+        if [ -z "$apFlag" ]; then
+            vsep='&'
+        fi
+        $anidbUDPClient $anidbConnect "${parms}${vsep}s=$s" || exit 95
+    }
+    anidbNextTime=$(expr $(date +%s) + $anidbThrottle)
+    echo $anidbNextTime > "${SCHED_FILE}"
+}
+
+# translate a-f to uppercase, then change all non hexidecimal
+# chars to spaces and let the 'set' command assign the potential hex
+# numbers to the function's positionals.  Then use the fancy ${!var}
+# indirection to access the positionals in reverse (crc favors end
+# of string).
+getCRC() {
+    local t=$1
+    set -- $(echo "$t" | tr 'a-f' 'A-F' | tr -c 'A-F0-9' ' ')
+    local ipos=$# crc value
+    while [ $ipos -gt 0 ]; do
+        value=${!ipos}
+        [ ${#value} -eq 8 ] && {
+            crc=$value
+            break
+        }
+        ((--ipos))
+    done
+    echo $crc
+}
+
+generateFakeVerFile() {
+    local fn=$1
+    local size=$(du -bL "$fn" | cut -f1)
+    local tstamp=$(date -r "$fn" -Iseconds)
+    local ecrc=$(getCRC "$fn")
+    local rc=0
+
+    [ -n "$ecrc" ] && print -ne "\nCheck: $(basename "$fn")"
+
+    local ver=$(java -jar ${jacksum_jar} -X -a crc32+md5+ed2k -F "v=1|$tstamp|CRC32=#CHECKSUM{0} MD5=#CHECKSUM{1} ed2k=#CHECKSUM{2}|$size|" "$fn" | tr \r --delete)
+
+    [ -n "$ecrc" ] && {
+        local crc=$(getVerifyHash CRC32 "$ver")
+        if [ "$ecrc" = "$crc" ]; then
+            print -en "\r Good: $(basename "$fn")\r"
+        else
+            print -en "\r FAIL: $(basename "$fn")\r"
+            rc=1
+        fi
+    }
+    echo "$ver"
+    return $rc
+}
+
+getVerifySize() {
+    local verify="$1"
+    IFS="|" read junk junk junk size junk < <(echo "$verify")
+    echo "$size"
+}
+
+getVerifyHash() {
+    local key=$1
+    local verify=$2
+    local j
+    local keyvalues
+    IFS='|' read j j keyvalues j < <(echo "$verify")
+    local $keyvalues
+
+    echo ${!key:-NONE}
+}
+
+setVerifyHash() {
+    local hash=$1 nvalue=$2 verify=$3
+
+    local ver tstamp fsize hashes fname nhashes
+    IFS="|" read ver tstamp hashes fsize fname < <(echo "$verify")
+
+    local found=0
+    while IFS="=" read name value; do
+        if [ "$hash" = "$name" ]; then
+            found=1
+            value=$nvalue
+        fi
+        nhashes=$(echo $nhashes $name=$value)
+    done < <(echo "$hashes" | sed 's/ /\n/g')
+    [ $found -eq 0 ] && nhashes=$(echo $nhashes $hash=$nvalue)
+
+    echo "$ver|$tstamp|$nhashes|$fsize|$fname"
+}
+
+doUnknownStatus() {
+    echo "filedirector: Unknown status type $1: filename=$2" > /dev/tty
+}
+
+makeDir() {
+    local dir="$1"
+    [ -d "$dir" ] || {
+        mkdir -p "$dir" || {
+            return 1
+        }
+    }
+    return 0
+}
+
+doMatchFile() {
+    local fn="$1"
+    local targetDir=${failedDir}
+
+    local verify
+    local check=1
+    if [ -f "$fn.ver" ]; then
+        verify=$(cat "$fn.ver") || check=0
+    else
+        verify=$(generateFakeVerFile "$fn") || check=0
+    fi
+    [ $check -eq 1 ] && targetDir=$(getTargetDir "$fn" "$verify")
+    ((fileCount++))
+
+    makeDir "$targetDir" || continue
+
+    local bfn=$(basename "$fn")
+    if [ ! -f "$targetDir/$bfn" ]; then
+        if mv "${fn:0:${#fn}-4}"* "$targetDir/"; then
+            # move any mymovie.srt or such files as well
+            print " Moved $fn"
+            print "       $targetDir"
+        else
+            print "ERROR: unable to move files to $targetDir"
+        fi
+    else
+        print "DUPLICATE: $(basename "$targetDir")/$bfn"
+        mv "${fn:0:${#fn}-4}"* "$dupDir/" || {
+            print "ERROR: unable to move files to $dupDir"
+        }
+    fi
+}
+
+doMismatchFile() {
+    local fn="$1"
+    local targetDir=${mismatchDir:=failed}
+
+    makeDir "$targetDir" || continue
+
+    mv "$fn" "$targetDir/" || {
+        print "ERROR: unable to move files to $targetDir"
+    }
+}
+
+doUnknownFile() {
+    print "Skipped file: unknown CRC - $1"
+}
+
+isHentai() {
+    local cats="$1"
+
+    egrep -i 'hentai|restricted' > /dev/null < <(echo "$cats") && echo 1 || echo 0
+}
+
+fetchAnidbInfo() {
+    local fn="$1"
+    local verify="$2"
+    local ed2k=$(getVerifyHash ed2k "$verify")
+    local md5=$(getVerifyHash MD5 "$verify")
+    local size=$(getVerifySize "$verify")
+    local reply
+    local i
+
+    # retry logic
+    for i in {5..1}; do
+        reply=$(anidb:sendRequest "FILE size=$size&ed2k=$ed2k&fcode=14&acode=72351746") || {
+            print "ERROR: unable to get information from anidb"
+            return 1
+        }
+
+        local code=$(anidb:getReturnCode "$reply")
+        case "${code:=0}" in
+            399);; 649);;
+            *) break;;
+        esac
+
+        print "ERROR: retry $i ($reply)"
+    done
+
+    # 220 = file found
+    [ "${code:=0}" -ne 220 ] && {
+        print "reply: $reply"
+        return 1
+    }
+
+    local fid
+    local aid
+    local epid
+    local gid
+    local gsname
+    local romanji
+    local english
+    local category
+    local data=$(echo "$reply" | head -2 | tail -1)
+    
+    IFS="|" read fid aid epid gid gsname romanji english category < <(echo "$data")
+    
+    updateVerFile "$fn" "$verify" "$data"
+
+    # cache the results (remove any previous one)
+    grep -v "fid=$fid|" "$aniFilesDb" > "$aniFilesDb.new"
+    echo "fid=$data|md5=$md5" >> "$aniFilesDb.new"
+    mv "$aniFilesDb.new" "$aniFilesDb"
+
+    # cache the group naming as well, to allow overrides later
+    grep -m 1  "gid=$gid|" "$aniGroupDb" > /dev/null || {
+        echo "gid=$gid|$gsname" >> $aniGroupDb
+    }
+
+    # output the data
+    echo "$data"
+}
+
+updateVerFile() {
+    local fn="$1"
+    local verify="$2"
+    local data="$3"
+
+    local fid
+    local aid
+    local epid
+    local gid
+    local gsname
+    local romanji
+    local english
+    local category
+
+    IFS="|" read fid aid epid gid gsname romanji english category < <(echo "$data")
+
+    if [ -f "$fn.ver" ]; then
+        verify=$(setVerifyHash ani_aid $aid "$verify")
+        verify=$(setVerifyHash ani_fid $fid "$verify")
+        verify=$(setVerifyHash ani_gid $gid "$verify")
+        verify=$(setVerifyHash ani_epid $epid "$verify")
+        verify=$(setVerifyHash ani_adult $(isHentai "$category") "$verify")
+
+        # update the ver file with AniDB info
+        echo "$verify" > "$fn.ver"
+    fi
+}
+
+lookupFile() {
+    local fn="$1"
+    local verify="$2"
+    local aid
+
+    local fid=$(getVerifyHash ani_fid "$verify")
+    local md5=$(getVerifyHash MD5 "$verify")
+    if [ -z "$fid" ]; then
+        fetchAnidbInfo "$fn" "$verify"
+    else
+        if data=$(grep -m 1 "fid=$fid|" "$aniFilesDb"); then
+            # output the data without 'fid=' prefix
+            echo "$data" | cut -c5-
+            updateVerFile "$fn" "$verify" "${data:4}"
+        else
+            if data=$(grep -m 1 "|md5=$md5" "$aniFilesDb"); then
+                echo "$data" | cut -c5-
+                updateVerFile "$fn" "$verify" "${data:4}"
+            else
+                fetchAnidbInfo "$fn" "$verify"
+            fi
+        fi
+    fi
+}
+
+getTargetByDefault() {
+    echo ${verifiedDir}
+    return 0
+}
+
+scrubDirName() {
+    echo "$1" | 
+        sed 's/ :/:/g' |
+        sed 's/:/-/g' |
+        sed 's/  \+/ /g' |
+        sed "s/\`/'/g" |
+        sed 's/\//-/g'
+}
+
+scrubGroupName() {
+    echo "$1" | tr :/ -
+}
+
+formatGroup() {
+    local data=$1
+
+    local j
+    local gsname
+
+    # lookup any overrides for this group name
+    IFS="|" read j j j gid gsname j j j < <(echo "$data")
+    gcache=$(grep -m 1 "gid=$gid|" $aniGroupDb) && {
+        IFS="|" read j gsname < <(echo "$gcache")
+    }
+    scrubGroupName "$gsname"
+}
+
+formatTargetDir() {
+    local fn=$1
+    local data=$2
+
+    local j
+    local gid
+    local gsname
+    local romanji
+    local english
+    local category
+
+    local isH=""
+    IFS="|" read j j j gid gsname romanji english category < <(echo "$data")
+
+    [ $(isHentai "$category") -eq 1 ] && isH="(H) "
+    if [ -z "$english" ]; then
+        echo "$romanji ${isH}"
+    else
+        if [ -z "$romanji" ]; then
+            echo "$english ${isH}"
+        else
+            echo "$english (aka $romanji) ${isH}"
+        fi
+    fi
+}
+
+getTargetByCache() {
+    local fn="$1"
+    local ver="$2"
+
+    local j
+    local aid
+    local gid
+    local gsname
+    local data
+    local targetDir
+
+    data=$(lookupFile "$fn" "$ver") || return 1
+
+    IFS="|" read j aid j gid j < <(echo "$data")
+
+    local orDir
+    if orDir=$(grep -m 1 "aid=$aid|" "$aniAnimeDb"); then
+        IFS="|" read aid targetDir < <(echo "$orDir")
+    else
+        targetDir=$(formatTargetDir "$fn" "$data")
+        echo "aid=$aid|$targetDir" >> "$aniAnimeDb"
+    fi
+    targetDir=$(scrubDirName "$targetDir")
+    targetDir="$targetDir[$(formatGroup "$data")]"
+
+    # did we silently fail due to some parsing blunder?
+    [ "$targetDir" = ' []' ] && return 1
+    echo "$stage1Dir/$targetDir"
+}
+
+getTargetByRegexp() {
+    return 1
+}
+
+getTargetDir() {
+    local fn=$1
+    local ver="$2"
+    local dir
+
+    dir=$(getTargetByCache "$fn" "$ver" || getTargetByRegexp "$fn" "$ver" || getTargetByDefault "$fn" "$ver")
+    [ -z "$dir" ] && {
+        print "ERROR: unable to find a target directory! Exiting"
+        exit 1
+    }
+
+    echo "$dir"
+}
+
+progress() {
+    local count=$1
+    local tick=$2
+
+    [ -z "$todoCount" ] && return
+    local time=$(( ((todoCount - count) * $anidbThrottle) +  $tick ))
+    printf "%s%% of %s, ETA: %s" \
+        $(perl -e 'printf("%.0f", ('$count.0' / '$todoCount') * 100);') \
+        $todoCount \
+        $(printf "%d:%02d" $(($time / 60)) $(($time % 60)))
+}
+
+main() {
+    local stat
+    local filename
+    local crcs
+
+    while IFS="|" read stat filename crcs; do
+        case "$stat" in
+            MATCH) doMatchFile "$filename";;
+            MISMATCH) doMismatchFile "$filename";;
+            UNKNOWN) doUnknownFile "$filename";;
+            *) doUnknownStatus "$stat" "$filename";;
+        esac
+    done
+}
+
+fileCount=0
+if [ $# -gt 0 ]; then
+    if [ $# -lt 11 ]; then
+        anidbThrottle=4
+    fi
+    todoCount=$#
+    while [ $# -gt 0 ]; do
+        [ -f "$1" ] && echo "MATCH|$1"
+        shift
+    done | main
+else
+    main
+fi
+anidb:logoff

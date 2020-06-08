@@ -1,0 +1,31 @@
+#!/usr/bin/env python
+
+import gamin
+import time
+import os
+import sys
+
+def callback(path, event):
+    flag = 0
+    if os.path.isfile(path):
+        if event == gamin.GAMCreated:
+            flag = 1
+        if event == gamin.GAMChanged:
+            flag = 1
+        if event == gamin.GAMExists:
+            flag = 1
+
+    if flag == 1:
+        print "NEW|%s/%s" % (os.getcwd(), path)
+        sys.stdout.flush()
+
+mon = gamin.WatchMonitor()
+mon.watch_directory(".", callback)
+time.sleep(1)
+# ret = mon.event_pending()
+# if ret > 0:
+while 1:
+    ret = mon.handle_one_event()
+    ret = mon.handle_events()
+mon.stop_watch(".")
+del mon

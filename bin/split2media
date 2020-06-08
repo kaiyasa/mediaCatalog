@@ -1,0 +1,57 @@
+#!/bin/bash
+# usage: $0 volId [ volPrefix ]
+#   volId is a number for the collection (1, 2, 3, ..., 9999)
+#   volPrefix is the prefix name for the collection (anime, movies, etc)
+
+# TODO: make paranoid 1% par2 optional
+
+usage() {
+    echo "usage: $0 volId [ volPrefix ]"
+    echo "    volId is a number for the collection (1, 2, 3, ..., 9999)"
+    echo "    volPrefix is the prefix name for the collection (anime, movies, etc)"
+}
+
+idFormat="%04g"
+[ -z "$1" ] && {
+    usage
+    exit 1
+}
+
+[ -z "$(expr $1 + 1)" ] && {
+    echo "Failed!  $1 must be an ordinal number"
+    usage
+    exit 1
+}
+
+i=$1
+volPrefix="${2:-anime}"
+volId=$(printf $idFormat $i)
+volName="${volPrefix}$volId"
+volVerify="v-${volName}"
+
+while read size fname; do
+    if [ $size = "break" ]; then
+        i=$(expr $i + 1)
+        volId=$(printf $idFormat $i)
+        volName="${volPrefix}$volId"
+        volVerify="v-${volName}"
+        echo "****"
+        echo "Disk $i"
+        echo "****"
+    else
+        fileDest=$(dirname "$volName/$fname")
+        verifyDest=$(dirname "$volVerify/$fname")
+        [ -d "$fileDest" ] || mkdir -p "$fileDest" && {
+            mv -vi "$fname" "$fileDest/" < /dev/tty && {
+                cp -ip "$fname.ver" "$fileDest/" < /dev/tty
+                [ -d "$verifyDest" ] || mkdir -p "$verifyDest" && {
+                    mv -i "$fname.ver" "$verifyDest/" 2> /dev/null < /dev/tty
+                    mv -i "${fname}"*.par2 "$verifyDest/" 2> /dev/null < /dev/tty
+                }
+                dir=$(dirname "$fname")
+                rmdir "$dir" 2> /dev/null
+                [ -e "$volName/.volume" ] || echo "${volPrefix}$volId" > "$volName/.volume"
+            }
+        }
+    fi
+done

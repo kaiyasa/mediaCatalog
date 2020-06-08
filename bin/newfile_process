@@ -1,0 +1,5 @@
+#!/bin/bash
+
+while IFS="|" read status fname; do
+    echo "Do something with $fname"
+done

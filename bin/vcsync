@@ -1,0 +1,136 @@
+#!/usr/bin/tclsh
+
+set namedb(0) 0
+unset namedb(0)
+
+proc parseData {line var } {
+    upvar $var entry
+
+    set values [split $line "|"]
+    set entry(version) [lindex $values 0]
+    set entry(timestamp) [lindex $values 1]
+    set entry(hashes) [lindex $values 2]
+    set entry(filesize) [lindex $values 3]
+    set entry(filename) [lindex $values 4]
+    if {[regexp split=1 $entry(hashes)]} {
+        set entry(split) 1
+    } else {
+        set entry(split) 0
+    }
+}
+
+proc addEntry {var} {
+    variable md5db
+    variable namedb
+    variable entrydb
+
+    upvar $var entry
+
+    lappend md5db($entry(hashes)) $entry(filename)
+    set namedb($entry(filename)) $entry(hashes)
+    set entrydb($entry(filename)) [array get entry]
+}
+
+proc readSummary {fname} {
+    set fp [open $fname "r"]
+    foreach line [split [read $fp] \n] {
+        if {"" != $line} {
+            parseData $line entry
+            addEntry entry
+        }
+    }
+    close $fp
+}
+
+proc writeSummary {fname} {
+    variable md5db
+    variable namedb
+    variable entrydb
+
+    set fd [open $fname "w"]
+    foreach name [lsort [array names namedb]] {
+        array set e [set entrydb($name)]
+        puts $fd "$e(version)|$e(timestamp)|$e(hashes)|$e(filesize)|$e(filename)"
+    }
+    close $fd
+}
+
+proc checkInSummary {fname} {
+    variable namedb
+
+    return [info exists namedb($fname)]
+}
+
+proc addToSummary {fname} {
+    set hashes [exec jacksum -X -a crc32+md5+ed2k -F "CRC32=#CHECKSUM{0} MD5=#CHECKSUM{1} ed2k=#CHECKSUM{2}" $fname]
+    if {[file size $fname] > 16384} {
+        append hashes " MD5-16k=[string toupper [exec dd if=$fname bs=16k count=1 2> /dev/null | md5sum - | cut -c1-32]]"
+    }
+    set data [list "v=1" [exec date -r "$fname" -Iseconds] $hashes [lindex [split [exec du -bL "$fname"]] 0] $fname]
+    set line [join $data "|"]
+    parseData $line entry
+    addEntry entry
+}
+
+proc notExcluded {fname} {
+    if {".sub" == [file extension $fname]} {
+        return 0;
+    }
+    if {".summary" == $fname} {
+        return 0;
+    }
+    if {".vcatalog" == $fname} {
+        return 0;
+    }
+    return 1;
+}
+
+if {[llength $argv] > 0} {
+    cd [lindex $argv 0]
+    puts "Processing [lindex $argv 0]"
+}
+
+set fn ".vcatalog"
+puts stdout "Reading $fn"
+catch {readSummary $fn} error
+#puts stdout "msg: $error"
+
+set flag 0
+set nr 0
+puts stdout "Removing deleted files"
+foreach file [array names namedb] {
+    array set entry $entrydb($file)
+    set expfile $file
+    if {$entry(split) == 1} {
+        set expfile "${file}.00"
+    }
+    if {![file exists $expfile]} {
+        unset namedb($file)
+        puts stdout "    Remove $file"
+	    incr nr
+	    set flag 1
+    }
+}
+puts stdout "  $nr removed"
+
+puts stdout "Locating new files"
+set nr 0
+foreach file [lsort [glob -nocomplain .* *]] {
+    if {[notExcluded $file]} {
+        if {[file isfile $file]} {
+            if {![checkInSummary $file]} {
+                puts stdout "    Adding $file"
+                addToSummary $file
+	            incr nr
+	            set flag 1
+            }
+        }
+    }
+}
+puts stdout "  $nr added"
+
+if {$flag} {
+    puts stdout "Writing $fn file"
+    writeSummary $fn
+}
+puts stdout "\n"

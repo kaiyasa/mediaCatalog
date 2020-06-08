@@ -1,0 +1,26 @@
+#!/bin/bash
+
+[ ! -f "$1" ] && {
+    echo "$(basename $0): <break.lst>"
+    exit 1
+}
+
+mediasize=4589850
+sum=0
+idx=0
+frag=0
+tfrag=0
+
+printf "Seq %-7s %-7s    %-10s\n" Used Avail "Total Fragmentation"
+while read s n; do
+    case "$s" in
+        break) frag=$((mediasize - sum));
+               ((tfrag += frag));
+               printf "%02d: %-7d %-7d -> %-10d\n" $((++idx)) $sum $frag $tfrag
+               sum=0 ;;
+        *) ((sum += s));;
+    esac
+done < "$1"
+frag=$((mediasize - sum))
+((tfrag += frag))
+printf "%02d: %-7d %-7d -> %-10d\n" $((++idx)) $sum $frag $tfrag

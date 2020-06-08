@@ -1,0 +1,27 @@
+#!/bin/bash
+# usage: $0 [volPrefix] [sort_options]
+#   volPrefix = collection name (ie anime, movie, collection, etc
+#   sortoptions = options to pass to 'sort' (if none, default is alpha sort)
+
+volPrefix=${1:-anime}
+sortOptions=$2
+
+showAvgFileSizePerDir() {
+    local dir=$1
+    [ -d "$dir" ] || return 1
+
+    local numFiles=$(ls "$dir" | wc -l)
+    [ $numFiles -gt 0 ] || return 1
+
+    local dirSize=$(du -sk "$dir" | cut -f1)
+    local avgFileSize=$(expr $dirSize / $numFiles)
+    echo -e "$avgFileSize\t$dir"
+}
+
+find -maxdepth 1 -type d | egrep -v '^.$|^./'$volPrefix | while read d ; do 
+    if [ -n "$sortOptions" ]; then
+        showAvgFileSizePerDir "$d"
+    else
+        echo -e "$d"
+    fi
+done | sort $sortOptions | cut -f2- -d/

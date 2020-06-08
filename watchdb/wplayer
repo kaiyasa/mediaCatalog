@@ -1,0 +1,114 @@
+#!/bin/bash
+dbname=$HOME//Documents/video/anime/watchdb.sqlite3
+
+sqllink="sqlite3 $dbname"
+
+createTables() {
+    $sqllink <<EOL
+create table watch (
+    fname varchar(255) primary key,
+    fid INTEGER,
+    aid INTEGER,
+    epid INTEGER,
+    watched,
+    last_upd datetime
+);
+EOL
+}
+
+getAniDbInfo() {
+    local vfile="$1.ver"
+    local mfile="$(basename "$1")"
+    local mdir="$(dirname "$1")"
+
+    if [ -f "$vfile" ]; then
+        local junk keyvalues
+        IFS='|' read junk junk keyvalues junk < <(cat "$vfile")
+        local $(echo "$keyvalues" | sed 's/MD5-16k/MD5_16k/')
+        echo "ani_fid=$ani_fid ani_aid=$ani_aid ani_epid=${ani_epid:=NULL}"
+    else
+        # does .vcatalog exist?
+        if [ -f "$mdir/.vcatalog" ]; then
+            while IFS="|" read junk junk keyvalues junk vfile; do
+                if [ "$vfile" = "$mfile" ]; then
+                    local $(echo "$keyvalues" | sed 's/MD5-16k/MD5_16k/')
+                    echo "ani_fid=$ani_fid ani_aid=$ani_aid ani_epid=${ani_epid:=NULL}"
+                fi
+            done < "$mdir/.vcatalog"
+        else
+            echo ani_fid=""
+        fi
+    fi
+}
+
+play() {
+    local mfname="$1"
+    local mgname=$(basename "$1" | tr [:punct:] _ | tr ' ' _)
+    local $(getAniDbInfo "$mfname")
+
+    local sql
+    if [ -n "$ani_fid" ]; then
+        sql="insert into watch (fname, fid, aid, epid, watched, last_upd) VALUES ('$mgname', $ani_fid, $ani_aid, $ani_epid, 'Y', datetime('now'))"
+    else
+        sql="insert into watch (fname, watched, last_upd) VALUES ('$mgname', 'Y', '$(date)')"
+    fi
+
+    if [ -f "$mfname" ]; then
+        $sqllink "$sql"
+        echo $sqllink "$sql"
+    fi
+    mplayer "$mfname"
+}
+
+status() {
+    local mfname="$1"
+    local mgname=$(basename "$1" | tr [:punct:] _ | tr ' ' _)
+    local $(getAniDbInfo "$mfname")
+
+    local sql
+    if [ -n "$ani_epid" ]; then
+        sql="select watched, fid from watch where aid = $ani_aid and epid = $ani_epid"
+    elif [ -n "$ani_fid" ]; then
+        sql="select watched, fid from watch where fid = $ani_fid"
+    else
+        sql="select watched, fid from watch where fname = '$mgname'"
+    fi
+    local d=""
+    local watched fid jwatched
+    while IFS='|' read jwatched fid; do
+        [ "$jwatched" = "Y" ] && watched="Y"
+        [ "$ani_fid" = "$fid" ] && break
+    done < <(sqlite3 $dbname "$sql")
+
+    if [ -n "$ani_fid" ]; then
+        if [ "$watched" = "Y" ]; then
+            d="-"
+            if [ "$ani_fid" = "$fid" ]; then
+                d="*"
+            fi
+        fi
+    else
+        if [ "$watched" = "Y" ]; then
+            d="*"
+        fi
+    fi
+    printf "% 2s %s\n" "$d" "$(basename "$mfname")"
+}
+
+if [ ! -f "$dbname" ]; then
+    echo "Creating table(s)"
+    createTables
+fi
+
+if [ "$1" = "-s" ]; then
+    shift
+    while [ $# -gt 0 ]; do
+        status "$1"
+        shift
+    done
+else
+    while [ $# -gt 0 ]; do
+        play "$1"
+        shift
+    done
+fi

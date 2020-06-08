@@ -1,0 +1,69 @@
+#!/bin/bash
+# usage: $0 volPrefix listfile pardb mifodb
+#   volPrefix = prefix of collection (eg. anime, movies, collection, etc)
+#   listfile = name of parity processing list file
+#   pardb = location of parity db
+#   mifodb = location of catalog/mifo db
+
+
+volPrefix="${1:-anime}"
+listfile="${2:-parproc.lst}"
+pardb="${3:-/media/sdb1/${volPrefix}/pardb}"
+mifodb="${4:-/media/sdb1/${volPrefix}/catalog/todo}"
+
+for i in ${volPrefix}*; do
+    find "$i" -follow -type d -exec chmod 775 '{}' \;
+    find "$i" -follow -type f -exec chmod 664 '{}' \;
+    while read fname; do
+        splitFile "$fname"
+    done < $(find "$i" -size +4G -print)
+    find "$i" -follow -type d -exec vcimport '{}' \;
+    nice -n 15 find "$i" -follow -type d -exec vcsync '{}' \;
+done
+
+splitFile() {
+    local fn="$1"
+    local v tstamp hashes size
+
+    read v tstamp hashes size <(cat "$fn.ver")
+
+    # mark the .ver as a split file
+    hashes="$hashes split=1"
+    echo "$v|$tstamp|$hashes|$size" > "$fn.ver.new" || {
+        rm "$fn".0[0-9] "$fn.ver.new"
+        return -1
+    }
+
+    # split file in 2GB pieces with numeric extensions (e.g.  foo.00, foo.01)
+    split -d -b 2G "$fn" "$fn." || {
+        rm "$fn".0[0-9]
+        return -1
+    }
+
+    # ok, nearly there.. move the new .ver into place
+    mv "$fn.ver.new" "$fn.ver" || {
+        rm "$fn".0[0-9] "$fn.ver.new"
+        return -1
+    }
+
+    # now, copy the original timestamp over and remove the file
+    touch -r "$fn" "$fn".[0-9][0-9]
+    rm "$fn"
+}
+
+copy() {
+# copy .vcatalog files into the mifodb
+#  (note: skip toplevel .vcatalog (one has .volume in it)
+#  (assumption: no valid directories start with '.')
+echo "Copying .vcatalog files to $mifodb"
+cpio --pass-through --make-directories --preserve-modification-time \
+    --dereference --unconditional "$mifodb" < <(
+        for dir in "$volPrefix"*/*; do
+            find "$dir" -name .vcatalog
+        done
+    )
+nice -n 15 genmediainfo "$volPrefix" "$mifodb"
+}
+
+copy
+nice -n 15 genpars "$pardb" < "$listfile"

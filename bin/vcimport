@@ -1,0 +1,135 @@
+#!/usr/bin/tclsh
+
+set namedb(0) 0
+unset namedb(0)
+
+proc parseData {line var } {
+    upvar $var entry
+
+    set values [split $line "|"]
+    set entry(version) [lindex $values 0]
+    set entry(timestamp) [lindex $values 1]
+    set entry(hashes) [lindex $values 2]
+    set entry(filesize) [lindex $values 3]
+    set entry(filename) [lindex $values 4]
+}
+
+proc addEntry {var} {
+    variable md5db
+    variable namedb
+    variable entrydb
+
+    upvar $var entry
+
+    if {[info exists namedb($entry(filename))]} {
+        puts stdout "WARNING: overriding existing entry"
+    }
+    lappend md5db($entry(hashes)) $entry(filename)
+    set namedb($entry(filename)) $entry(hashes)
+    set entrydb($entry(filename)) [array get entry]
+}
+
+proc readSummary {fname} {
+    set fp [open $fname "r"]
+    foreach line [split [read $fp] \n] {
+        if {"" != $line} {
+            parseData $line entry
+            addEntry entry
+        }
+    }
+    close $fp
+}
+
+proc writeSummary {fname} {
+    variable md5db
+    variable namedb
+    variable entrydb
+
+    set fd [open $fname "w"]
+    foreach name [lsort [array names namedb]] {
+        array set e [set entrydb($name)]
+        puts $fd "$e(version)|$e(timestamp)|$e(hashes)|$e(filesize)|$e(filename)"
+    }
+    close $fd
+}
+
+proc checkInSummary {fname} {
+    variable namedb
+
+    return [info exists namedb($fname)]
+}
+
+proc addToSummary {fname} {
+    set hashes [exec jacksum -X -a crc32+md5+ed2k -F "CRC32=#CHECKSUM{0} MD5=#CHECKSUM{1} ed2k=#CHECKSUM{2}" $fname]
+    if {[file size $fname] > 16384} {
+        append hashes " MD5-16k=[string toupper [exec dd if=$fname bs=16k count=1 2> /dev/null | md5sum - | cut -c1-32]]"
+    }
+    set data [list "v=1" [exec date -r "$fname" -Iseconds] $hashes [lindex [split [exec du -bL "$fname"]] 0] $fname]
+    set line [join $data "|"]
+    parseData $line entry
+    addEntry entry
+}
+
+proc importToSummary {fname} {
+    set fp [open ${fname}.ver r]
+    set line [lindex [split [read $fp] \n] 0]
+    parseData $line entry
+    set entry(filename) $fname
+    addEntry entry
+    close $fp
+}
+
+proc notExcluded {fname} {
+    if {".sub" == [file extension $fname]} {
+        return 0;
+    }
+    if {".summary" == $fname} {
+        return 0;
+    }
+    if {".vcatalog" == $fname} {
+        return 0;
+    }
+    return 1;
+}
+
+if {[llength $argv] > 0} {
+    cd [lindex $argv 0]
+    puts "Processing [lindex $argv 0]"
+}
+
+set fn ".vcatalog"
+puts stdout "Reading $fn"
+catch {readSummary $fn} error
+#puts stdout "msg: $error"
+
+set flag 0
+set removeFiles {}
+
+puts stdout "Locating verify files"
+set nr 0
+foreach file [glob -nocomplain .*.ver *.ver] {
+    if {[notExcluded $file]} {
+        if {[file isfile $file]} {
+            set basename [file rootname $file]
+            if {![checkInSummary $basename]} {
+                puts stdout "    Importing $basename"
+                importToSummary $basename
+                lappend removeFiles $file
+	            incr nr
+	            set flag 1
+            } else {
+                puts stdout "    PreExist  $basename"
+            }
+        }
+    }
+}
+puts stdout "  $nr imported"
+
+if {$flag} {
+    puts stdout "Writing $fn file"
+    writeSummary $fn
+    foreach file $removeFiles {
+        file delete $file
+    }
+}
+puts stdout "\n"

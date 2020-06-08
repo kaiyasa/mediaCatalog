@@ -1,0 +1,142 @@
+#!/bin/bash
+# usage: $0 volumeID [iso]
+# configurable options with env vars:
+# EJECT=anything : auto eject media after burn (eg EJECT=1 burndvd collection0001)
+# unset EJECT    : do not eject media after burn
+
+# DEBUG - these are stubs to help debug script flow
+eject() {
+    echo eject $*
+}
+growisofs() {
+    echo growisofs $*
+}
+mount() {
+    echo mount $*
+}
+sleep() {
+    echo sleep $*
+}
+verifymedia() {
+    echo verifymedia $*
+}
+# DEBUG - uncomment the following line to turn off debug mode
+unset eject growisofs mount sleep verifymedia
+
+usage() {
+    echo "usage: $0 volumeID [iso]"
+    echo "    iso : use pre-mastered ISO image mode for volumeID"
+    echo "        - volumeID contains one and only one *.iso file"
+    echo "        - no media verification is performed"
+    echo "    configurable options with env vars:"
+    echo "    EJECT=anything : auto eject media after burn (eg EJECT=1 burndvd collection0001)"
+    echo "    unset EJECT    : do not eject media after burn"
+}
+
+getIsoName() {
+    local isoName
+    local volName=$1
+    read isoName < <(find "$volName" -type f -iname "*.iso")
+    echo $isoName
+}
+
+getSizeMd5() {
+    local version timestamp hash fsize fname
+    while IFS='|' read version timestamp hash fsize fname; do
+        if [ "$(basename "$1")" = "$fname" ] ; then
+            local $(echo "$hash" | sed 's/MD5-16k/MD5_16k/')
+            break
+        fi
+    done
+    echo $fsize $MD5
+}
+ 
+safeReload() {
+    local dev=$1
+    eject $dev; sleep 1; eject $dev
+    sleep 5
+    eject -t $dev
+}
+
+safeRemount() {
+    safeReload $dev
+    for i in $(seq 1 10); do
+        sleep $i
+        echo "Mount attempt $i"
+        mount /media/cdrom && break
+    done
+}
+
+[ -z "$1" ] && {
+    usage
+    exit 1
+}
+
+speed=12
+volName=$1
+isoMode=$(echo "$2" | tr A-Z a-z)
+if [ -f "$volName/.volume" ]; then
+    volLabel=$(cat "$volName/.volume")
+else
+    echo "Need $volName/.volume file!"
+    exit 1
+fi
+
+[ -z "$(which growisofs)" -o -z "$(which eject)" -o -z "$(which mount)" -o -z "$(which sleep)" -o -z "$(which verifymedia)" ] && {
+    echo "Missing supporting files"
+    exit 1
+}
+
+# musical alert if you like
+player=mpg123
+alert=alert.mp3
+if [ -z "$(which $player)" ]; then
+    player=:
+else
+    [ -f "$alert" ] || player=:
+fi
+
+# find 1st writer device
+dev=$(ls /dev/cdrw* | head -1)
+[ -z "$dev" ] && {
+    echo "Couldn't find writer"
+    exit 1
+}
+
+[ -d "$volName" ] && {
+    if [ "iso" = "$isoMode" ] ; then
+        # iso mode
+        isoName=$(getIsoName $volName)
+        [ ! -r "$isoName" ] && {
+            echo "ERROR: unable to read '$isoName'"
+            exit 1
+        }
+        if [ -z "$break" ] ; then
+            echo growisofs -speed=$speed -dvd-compat -Z $dev="$isoName"
+            growisofs -speed=$speed -dvd-compat -Z $dev="$isoName" || exit $?
+        else
+            echo growisofs -speed=2 -dvd-compat -use-the-force-luke=break:$break -Z $dev="$isoName"
+            growisofs -speed=2 -dvd-compat -use-the-force-luke=break:$break -Z $dev="$isoName" || exit $?
+        fi
+        echo
+        echo "Finished burning $volName: '$(basename "$isoName")'."
+        echo "Preparing to verify (DO NOT REMOVE DISC YET!!)"
+        safeRemount $dev
+
+        echo 
+        read fsize md5 < <(getSizeMd5 "$isoName" < "$(dirname "$isoName")/.vcatalog")
+        verifymedia $dev iso $fsize $md5
+    else
+        growisofs -speed=$speed -use-the-force-luke=notray -use-the-force-luke=dao -v -Z $dev -R -J -joliet-long -f -V "$volLabel" -uid 0 -gid 0 -file-mode=444 -dir-mode=555 $volName/ || exit $?
+        echo
+        echo "Finished burning '${volLabel:-$volName}'.  Preparing to verify (don't remove disc yet!)"
+        safeRemount $dev
+
+        echo 
+        verifymedia /media/cdrom/
+    fi
+    [ -n "$EJECT" ] && eject /media/cdrom
+    echo ""
+    $player -q $alert
+    echo "It is now safe to remove disc"
+}

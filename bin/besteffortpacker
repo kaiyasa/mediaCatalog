@@ -1,0 +1,34 @@
+#!/bin/bash
+# usage: $0 <reserved directories> <dirlist file> [java|tcl]
+
+reservedDirs=$1
+dirlistFile=$2
+method=${3:-java}
+breaklist=${4}
+
+usage() {
+    echo $0: \<reserved directories\> \<dirlist file\> [java\|tcl] "<break filename (java only)>"
+}
+
+[ -z "$dirlistFile" ] && {
+    usage
+    exit 1
+}
+
+while read dir ; do
+    dls=dls-$(echo $dir | tr / _).lst
+    [ ! -e "$dls" -o "$dir" -nt "$dls" ] && {
+        echo Generating $dir file list
+        getfilelist.sh "$dir" > "$dls"
+        echo Done $dir file list
+    }
+done < "$dirlistFile"
+
+case $method in
+    java) java -jar "$(dirname $0)/JPacker.jar" $reservedDirs $dirlistFile $breaklist;;
+    tcl) besteffortpacker.tcl $reservedDirs $dirlistFile;;
+    *)
+        echo ERROR: Unknown method $method
+        usage
+        exit 1;;
+esac

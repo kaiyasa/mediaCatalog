@@ -1,0 +1,77 @@
+#!/usr/bin/perl
+
+use lib (lib);
+
+use strict;
+use SQLite;
+use POSIX;
+
+my $dbfile = "db/anidb.sql3db";
+my $dbargs = { RaiseError  => 1, PrintError  => 1 };
+my $dbh = SQLite->connect( "dbi:SQLite:dbname=$dbfile", '', '', $dbargs);
+
+my @dashes;
+foreach my $i (1..200) {
+    push(@dashes, "-");
+}
+
+sub latestEpisodes {
+    my ($key) = @_;
+    my $sql = "
+  SELECT epno, coljoin(grpshortname) as grp, anime
+    FROM (
+            SELECT e.epid as epid, e.epsequence as epno, mediadir as anime,
+                   MAX(e.epairdate) as airdate
+              FROM mediafile m, episode e, dirname dn
+             WHERE m.epid = e.epid
+                   AND dn.animeid = m.animeid
+                   AND dn.mediadir like '%${key}%'
+          GROUP BY m.animeid
+          ORDER BY airdate DESC LIMIT 20
+         ) recent, mediafile mo, grp g
+   WHERE recent.epid = mo.epid
+         AND mo.grpid = g.grpid
+GROUP BY anime
+ORDER BY airdate
+";
+
+    my $sel = $dbh->prepare($sql);
+    $sel->execute;
+    $sel->bind_columns(\my ($epno, $grpName, $animeName));
+    printf("% -4s % -40s\n     %s\n", "epNo", "anime", "groups");
+    print @dashes[1..4], " ", @dashes[1..40], "\n";
+    printf(" % -3s % -40s\n     %s\n", $epno, $animeName, $grpName) while $sel->fetch;
+
+}
+
+sub seriesOrder {
+    my $args = "%$_[0]%";
+    my $sql = "
+  SELECT min(epairdate) as early, animeEpTotal, animeEpHighest, (CASE WHEN animeNameEnglish is null THEN animeNameRomaji ELSE animeNameEnglish||' (aka '||animeNameRomaji||')' END) as title
+    FROM episode e, anime a
+   WHERE e.animeid = a.animeid
+         AND epairdate > 0
+         AND title LIKE '$args'
+GROUP BY e.animeid
+ORDER BY early desc, title;
+";
+    my $sel = $dbh->prepare($sql);
+    $sel->execute;
+    $sel->bind_columns(\my ($airDate, $epTotal, $epHigh, $title));
+    printf(" % -8s % -4s %s\n", "Date", "Cnt", "Title");
+    print " ", @dashes[1..8], " ", @dashes[1..4], " ", @dashes[1..40], "\n";
+    printf(" % -8s % -4s %s\n", strftime("%D", gmtime($airDate)), ($epHigh > $epTotal ? "$epHigh*" : $epTotal), $title) while $sel->fetch;
+#sort -r -t'|' -n -k2
+}
+
+
+
+my %reports = (
+    latest => \&latestEpisodes,
+    series => \&seriesOrder
+);
+
+my $name = shift;
+
+my $func = $reports{$name};
+&$func(@ARGV) if $func;

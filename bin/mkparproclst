@@ -1,0 +1,9 @@
+#!/bin/bash
+# usage: $0 volPrefix
+#   volPrefix = volName prefix (eg. anime, movies, collection, etc)
+
+volPrefix=${1:-anime}
+
+for i in ${volPrefix}*; do
+    find $i -type d | grep / | sed 's/\// /'
+done

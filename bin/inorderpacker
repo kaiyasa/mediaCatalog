@@ -1,0 +1,60 @@
+#!/bin/bash
+# usage: $0 <dirlist file> [breaklist file] [limit]
+
+# 4173824 x 2k blocks (DL discs)
+defaultLimit=8347648
+# nice limit for DL discs
+defaultLimit=8347540
+
+# 2295104 x 2k blocks
+defaultLimit=4590208
+# typical anime DVD uses about 40 blocks for metadata
+# let's leave 104 blocks for metadata, should be plenty
+defaultLimit=4589850
+#defaultLimit=4520000
+#defaultLimit=4500000
+
+dirlistFile=$1
+breaklist=${2:--}
+limit=${3:-${defaultLimit}}
+
+print() {
+    echo "$*" > /dev/tty
+}
+
+usage() {
+    echo "$0: <dirlist file> [break filename] [limit]"
+}
+
+genFileList() {
+    while read dir ; do
+        find "$dir" -follow -type f -exec du -kL '{}' \; | sort -f -k2
+    done < "$1"
+}
+
+output() {
+    if [ "$1" = "-" ] ; then
+        cat -
+    else
+        cat > "$1"
+    fi
+}
+
+[ -z "$dirlistFile" -o -z "$breaklist" ] && {
+    usage
+    exit 1
+}
+
+curSize=0
+
+while read fsize fname; do
+    let newSize=fsize+curSize
+    if [ $newSize -le $limit ]; then
+        echo -e "$fsize\t$fname"
+        curSize=$newSize
+    else 
+        [ $curSize -gt 0 ] && echo "break $curSize"
+        echo -e "$fsize\t$fname"
+        curSize=$fsize
+    fi
+done < <(genFileList "$dirlistFile") | output "$breaklist"

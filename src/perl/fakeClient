@@ -1,0 +1,17 @@
+
+
+#echo "$@" > /dev/tty
+case "$1" in
+    AUTH\ *) echo 200 1xDFD LOGIN ACCEPTED;;
+    LOGOUT\ *) echo 203 LOGGED OUT;;
+    FILE1\ *) echo 501 LOGIN FIRST;;
+    FILE\ *)
+             e=$(echo "$@" | sed 's/.*ed2k=\([A-Fa-f0-9]\+\)&.*/\1/g');
+             if [ -f fids/ed2k.$e ]; then
+                 echo 220 FILE;
+                 cat fids/ed2k.$e;
+             else
+                 echo 320 NO SUCH FILE;
+             fi;;
+    *) echo 599 FAKE ME OUT;;
+esac

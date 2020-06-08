@@ -1,0 +1,912 @@
+#!/usr/bin/perl
+
+BEGIN {
+    our $installDir = "/home/dminer/.filedirector/install/lib";
+};
+use lib $installDir;
+
+use strict;
+use utf8;
+use Data::Dumper;
+use Getopt::ArgvFile qw(argvFile);
+use Getopt::Long;
+use POSIX;
+use File::Basename;
+use File::Copy;
+use File::stat;
+use File::HomeDir;
+use File::Spec;
+use File::Which;
+
+use AniDBRequest;
+use VerifyFile;
+use CacheDB;
+
+########## User configuration options ##################
+$Data::Dumper::Sortkeys = 1;
+
+# AniDB client program and host info
+my $anidbClient = "anidbClient.jar";
+my $anidbHostname = "api.anidb.info";
+my $anidbPort = "9000";
+my $localPort = "45678";
+my $fakeClient = 0;
+my $clientThrottle = 1;
+
+# location of verified and organized files
+my $stageDir="hold";
+
+# location of completed series
+my $completeDir="complete";
+
+# location of verified but unable to deduce organization
+my $holdDir="unsorted";
+
+# location duplicates (last one wins, meaning overwrites happen here)
+my $dupDir="duplicate";
+
+# in non-ver usage, CRC check failed
+my $failedDir="failed";
+
+# CLI prefix for running jacksum via java
+my $jacksum = "java -jar /usr/local/jacksum/jacksum.jar";
+
+########## End of user configuration options ##############
+
+### NO TOUCHIE from here down without having a clue! ###
+
+my $version = "2.1";
+my $banner = "filedirector, version $version";
+
+binmode STDOUT, ":utf8";
+binmode STDIN, ":utf8";
+binmode STDERR, ":utf8";
+
+Getopt::Long::Configure(qw(bundling no_getopt_compat));
+
+my $opt = {
+      "database-file" => File::Spec->catfile( File::HomeDir->my_home, ".filedirector", "anidb.sql3db")
+    , "install-directory" => File::Spec->catfile( File::HomeDir->my_home, ".filedirector", "lib")
+};
+
+my @CLI = (
+      "database-file|dbfile|f=s"
+    , "config-file|cfgfile|c=s"
+    , "install-directory|d=s"
+    , "userid|u|d=s"
+    , "password|p|d=s"
+    , "version"
+    , "help|h"
+);
+
+sub usage {
+    my $prog = basename($0);
+    my $message = <<EOM;
+$banner
+
+usage: $prog
+EOM
+    delete $opt->{'help'};
+    print $message;
+    print "    Values of ", Data::Dumper->Dump([ $opt ], [ qw(*options) ] ), "\n";
+    exit($_[0]);
+}
+
+sub parseCLIArgs {
+    my ($additionalOpts) = @_;
+#print "before args = ", join(", ", @ARGV), "\n";
+    if (defined($additionalOpts)) {
+        @{$opt}{ keys %{$additionalOpts} } = values %{$additionalOpts};
+    }
+    GetOptions($opt, @CLI) or usage(1);
+    if (defined($opt->{"config-file"})) {
+        push @ARGV, "@" . $opt->{"config-file"};
+    }
+    argvFile(default=>1);
+    GetOptions($opt, @CLI) or usage(1);
+#print "after  args = ", join(", ", @ARGV), "\n";
+
+    usage(0) if ($opt->{'help'});
+    print "$banner\n\n" if ($opt->{'version'});
+}
+
+my $anidb;
+sub anidbSetup {
+    my $jarPath = File::Spec->catfile($opt->{'install-directory'}, $anidbClient);
+    if ( ! -f $jarPath ) {
+        print "  ERROR: missing required jar file: $jarPath\n";
+        exit(2);
+    }
+
+    my $hasher = which("jacksum");
+    if (!defined($hasher)) {
+        print "  ERROR: missing required hashing utility: jacksum\n";
+        exit(2);
+    } else {
+        $jacksum = $hasher;
+    }
+
+    $anidb = AniDBRequest->new($opt->{"userid"}, $opt->{"password"}, {
+        anidbClient => "java -jar " . File::Spec->catfile($opt->{'install-directory'}, $anidbClient),
+        hostname    => $anidbHostname,
+        port        => $anidbPort,
+        localport   => $localPort,
+        blast       => !$clientThrottle,
+        fake        => $fakeClient
+    });
+}
+
+# global flag for signal handler
+my $bailout = 0;
+
+sub main_pipeline {
+    print "Notify mode enabled\n\n";
+    while ( <> ) {
+print "running\n";
+        chomp;
+        my ($status, $fname) = split /\|/;
+        if ($status == "NEW") {
+            if ( -f "$fname.ver" ) {
+print "got it, $fname\n";
+                processBatch($fname);
+            }
+        }
+
+        if ($bailout) {
+            print "   USER: interrupt signaled, exiting\n";
+            return;
+        }
+    }
+}
+
+sub processBatch {
+    if (@_ gt 1) {
+        print "\nProcessing ", scalar @_, " files\n\n";
+    }
+
+    foreach my $file (@_) {
+        if ($bailout) {
+            print "   USER: interrupt signaled, exiting\n";
+            return;
+        }
+
+        if ( -f $file ) {
+            my $code = processFile($file) if ( -f $file );
+#            if (!$code) {
+#                print "failed to process $file\n";
+#            }
+        } else {
+            print "  ERROR: no such file: $file\n";
+        }
+    }
+}
+
+#
+# one pandora's box opening now (signals, yah!)
+#
+
+$SIG{INT} = \&int_catcher;
+
+sub int_catcher {
+    $SIG{INT} = \&int_catcher;
+    $bailout = 1;
+    $anidb->interrupt();
+}
+
+
+sub processFile {
+    my $fname = shift;
+    my $targetDir;
+    my $newTargetDir;
+    my $error;
+
+    my $vfile = VerifyFile->new();
+    if ( -f "${fname}.ver" ) {
+        $vfile->load("${fname}.ver");
+    } else {
+        if (!generateFakeVerify($fname, $vfile)) {
+            $targetDir="failed";
+        }
+    }
+    
+    ($targetDir, $newTargetDir) = getTargetDir($vfile) unless defined($targetDir);
+    $targetDir = $holdDir                              unless defined($targetDir);
+
+    if ($vfile->isChanged()) {
+        if ($vfile->save() < 0) {
+            $error = "Unable to save changes to '$fname.ver'\n";
+        }
+    }
+
+    moveFile($targetDir, $fname, $vfile)
+        or $error = "move failed"
+        unless $error;
+
+    if ($newTargetDir ne "") {
+        moveDir($targetDir, $newTargetDir) 
+            or $error = "moveDir failed" 
+            unless $error;
+    }
+
+    print "  ERROR: $error\n" if $error;
+    return $error ? 0 : 1;
+}
+
+sub moveDir {
+    my ($srcDir, $destDir) = @_;
+    my $error;
+
+    move($srcDir, $destDir)
+        or $error = "Unable to move dir '$srcDir' to '$destDir'";
+
+    if ($error) {
+        print "  ERROR: $error\n";
+    } else {
+        print "   INFO: Moving directory\n";
+        print "  Moved: ", $srcDir, "\n";
+        print "      to $destDir\n\n";
+    }
+
+    return $error ? 0 : 1;
+}
+
+sub moveFile {
+    my ($targetDir, $fname, $vfile) = @_;
+    my $error;
+    my $bname = basename($fname);
+    my $srcdir = dirname($fname);
+
+
+    # check for dup (and divert if needed)
+    if ( -f "$targetDir/$bname" ) {
+        if ($targetDir eq $srcdir) {
+            # moving to the same place (not foolproof!)
+            print " InPlace $bname\n\n";
+            return 1;
+        }
+        print "DUPLICATE: '$bname' in '$targetDir'\n";
+        $targetDir=$dupDir;
+    }
+
+    if ( ! -d "$targetDir" ) {
+        mkdir($targetDir) or $error="Can't create '$targetDir': $!";
+    }
+    
+    if (!$error) {
+        # yay, the actual move (it will overwrite)
+        my $files = getFileList($targetDir, $fname);
+        foreach my $name (@{$files}) {
+            move("$srcdir/$name", "$targetDir")
+                or $error = "Can't move '$srcdir/$name' to '$targetDir': $!"
+                unless $error;
+        }
+    }
+
+    if (!$error) {
+        print "  Moved: ", $bname, "\n";
+        print "      to $targetDir\n\n";
+    } else {
+        print "  ERROR: $error\n";
+    }
+    return $error ? 0 : 1;
+}
+
+sub getStemFilename {
+    my ($filename) = @_;
+
+    if (index ($filename, ".") == 0) {
+        return $filename;
+    } elsif (index ($filename, ".") > 0) {
+        return substr($filename, 0, rindex($filename, "."));
+    } else {
+        return $filename;
+    }
+}
+
+sub getFileList {
+    # and I thought perl would be easier :b
+    # looking for basename of ${fname:0:$len-4}* pattern
+    # (stupid glob can't do spaces properly)
+    my ($targetDir, $fname) = @_;
+    my $error;
+
+    my $srcdir = dirname($fname);
+    my $pattern = getStemFilename(basename($fname));
+    opendir(DIR, $srcdir) or $error = "Can't opendir '$srcdir': $!";
+
+    my @files =
+        grep { substr($_, 0, length($pattern)) eq $pattern } readdir(DIR)
+        unless $error;
+    closedir DIR unless $error;
+    print "  ERROR: $error\n" if $error;
+    return \@files;
+}
+
+sub getTargetDir {
+    my ($vfile) = @_;
+
+    my ($result, $newDir) = getTargetDirByCache($vfile);
+    ($result, $newDir) = getTargetDirByRegexp($vfile) unless defined($result);
+    ($result, $newDir) = getTargetDirByDefault($vfile) unless defined($result);
+    return ($result, $newDir);
+}
+
+sub getTargetDirByDefault {
+    return $holdDir;
+}
+
+sub getTargetDirByRegexp {
+    return undef;
+}
+
+sub getTargetDirByCache {
+    my ($vfile) = @_;
+    my $cachedb = CacheDB->new($opt->{"database-file"});
+    my $result = undef;
+    my $dirname = undef;
+    my $gname = undef;
+    my $aid = $vfile->getOption("ani_aid");
+    my $cInfo;
+
+    # try to fetch via info in .ver file
+    if (defined($aid)) {
+        my $gid = $vfile->getOption("ani_gid");
+
+        $dirname = $cachedb->findDirName($aid);
+        $gname = $cachedb->findGroupName($gid);
+    }
+
+    # ok, if we didn't find all the info, try the file cache
+    if (!(defined($dirname) && defined($gname))) {
+        $cInfo = getCacheEntry($cachedb, $vfile);
+        my $save = 1;
+
+        if (!defined($cInfo)) {
+            return $result;
+        }
+
+        # FIXME: implication .ver is broken or out-of-date
+        $dirname = $cInfo->mediaDir();
+        $save = 0 if defined($dirname);
+
+        # generate a dirname if still unable to find one
+        $dirname = formatTargetDir($cInfo) unless defined($dirname);
+        $gname  = formatGroup($cInfo);
+        $gname  = "nogroup" unless defined($gname); # last-ditch default
+
+        $cachedb->addDirName($cInfo->animeId(), $dirname)
+            if $save && defined($dirname);
+
+    } else {
+        # ok, we had all the info needed to organize
+        # but it is quite possible the file data itself
+        # is missing.. this will fetch it again if needed
+        $cInfo = getCacheEntry($cachedb, $vfile);
+    }
+
+    # ok, managed to find a dirname, build proper target dir
+    if (defined($dirname)) {
+        $dirname = scrubTargetDir($dirname);
+        $gname = scrubGroup($gname);
+        $result = "${dirname}[$gname]";
+    }
+
+    # check in completeDir first otherwise default to stageDir
+    my $newDir = undef;
+    if (defined($result)) {
+        $newDir = "${completeDir}/${result}";
+        if ( -d "${completeDir}/${result}" ) {
+            $result = "${completeDir}/${result}";
+        } else {
+            $result = "${stageDir}/${result}";
+        }
+    }
+
+    # provide episode or series information
+    detectMissingFiles($cachedb, $cInfo) if defined($cInfo);
+    if ($cInfo->epSequence() =~ /^[0-9]+/) {
+        if ($cInfo->animeEpTotal() == $cInfo->epSequence()) {
+            print "  AniDB: COMPLETE! - Final episode for ",
+                  $cInfo->grpShortName(), "\n";
+        } else {
+            $newDir = undef;
+        }
+    } else {
+        $newDir = undef;
+    }
+
+    $newDir = undef if ($result eq $newDir);
+
+    return ($result, $newDir);
+}
+
+sub getCacheEntry {
+    my ($cachedb, $vfile) = @_;
+    my $result = undef;
+    my $fid = $vfile->getOption("ani_fid");
+
+    $result = $cachedb->findByFid($fid)
+        if defined($fid);
+#print "fid return\n", Dumper($result), "\n";
+
+    $result = $cachedb->findByMD5($vfile->md5())
+        unless defined($result);
+#print "md5 return\n", Dumper($result), "\n";
+
+    $result = $cachedb->findByCRC32($vfile->crc32(), $vfile->size())
+        unless defined($result);
+#print "crc32 return\n", Dumper($result), "\n";
+
+    $result = findByAniDB($cachedb, $vfile)
+        unless defined($result);
+#print "anidb return\n", Dumper($result), "\n";
+
+    updateVerifyFile($result, $vfile)
+        if defined($result);
+
+    return $result;
+}
+
+sub updateVerifyFile {
+    my ($cInfo, $vfile) = @_;
+    my $adult = isHentai($cInfo->animeCategory()) ? 1 : 0;
+
+    $vfile->setOption("ani_fid", $cInfo->fileId());
+    $vfile->setOption("ani_aid", $cInfo->animeId());
+    $vfile->setOption("ani_gid", $cInfo->grpId());
+    $vfile->setOption("ani_epid", $cInfo->epId());
+    $vfile->setOption("ani_adult", $adult);
+}
+
+sub formatGroup {
+    my ($cInfo) = @_;
+    my $grp = $cInfo->grpShortName();
+    return $grp;
+}
+
+sub scrubGroup {
+    my ($result) = @_;
+    $result =~ s/:|\///g;
+    $result =~ s/\?//g;
+    $result =~ s/ *& */&/g;
+    $result =~ s/_/ /g;
+    return $result;
+}
+
+sub formatTargetDir {
+    my ($cInfo) = @_;
+    my $ro = $cInfo->animeNameRomaji();
+    my $en = $cInfo->animeNameEnglish();
+    my $ka = $cInfo->animeNameKanji();
+    my $isH = (isHentai($cInfo->animeCategory)) ? "(H) " : "";
+    my $result = undef;
+
+
+    $result = smarterFormat($en, $ro, $ka) . " $isH";
+    return $result;
+}
+
+sub wordCompare {
+    my ($s1, $s2) = @_;
+
+    $s1 = uc $s1;
+    $s2 = uc $s2;
+    my @w1 = $s1 =~ /(\w+)/mg;
+    my @w2 = $s2 =~ /(\w+)/mg;
+
+    my $total = 0;
+    my $match;
+    foreach my $wo (@w1) {
+        $match = 0;
+        foreach my $wi (@w2) {
+            if ($wi eq $wo || $wo =~ m/^$wi/) {
+                $match = 1;
+                last;
+            }
+        }
+        $total += $match;
+    }
+
+    return (@w1 == $total) ? 1 : 0;
+}
+
+sub decide {
+    my ($e, $r) = @_;
+    my ($use_e, $use_r, $use_both) = (1, 2, 0);
+    my ($et, $rt) = ($e, $r);
+
+    return $use_r if !defined($e);
+    return $use_e if !defined($r);
+
+    $et = uc $et;
+    $rt = uc $rt;
+
+    if ($et eq $rt) {
+        return $use_r;
+    }
+
+    my $w1 = wordCompare($e, $r);
+    my $w2 = wordCompare($r, $e);
+
+    # ($w1 == $w2 && $w1 == 0) => different word sets
+    # same words, possibly different order, punctuation, or spacing
+    if ($w1 == $w2 && $w1 == 1) {
+        return $use_r;
+    }
+
+    if ($w1 != $w2) {
+        if ($w1 == 1) {
+            # $e is a subset of $r
+            return $use_r;
+        } else {
+            # $r is a subset of $e
+            return $use_e;
+        }
+    }
+
+    return $use_both;
+}
+
+sub smarterFormat {
+    my ($e, $r, $k) = @_;
+    my ($use_e, $use_r, $use_both) = (1, 2, 0);
+
+    # remove those damn periods
+    $e =~ s/\.$//;
+    $r =~ s/\.$//;
+
+    my $which = decide($e, $r);
+    if ($which == $use_both) {
+        return "$e (aka $r)";
+    } elsif ($which == $use_e) {
+        return "$e";
+    } elsif ($which == $use_r) {
+        return "$r";
+    }
+}
+
+sub scrubTargetDir {
+    my ($result) = @_;
+
+    # scrub it now
+    $result =~ s/ :/:/g;
+    $result =~ s/:/-/g;
+    $result =~ s/\?//g;
+    $result =~ s/  +/ /g;
+    $result =~ s/\//-/g;
+
+    return $result;
+}
+
+sub isHentai {
+    my ($categories) = @_;
+    return ($categories =~ /hentai|restricted/mi) ? 1 : 0;
+    
+}
+
+sub detectMissingFiles {
+    my ($cachedb, $cInfo) = @_;
+    my $meps = [];
+
+    if ($cInfo->epSequence() =~ /^[0-9]/) {
+        my $maxEp = $cInfo->epSequence();
+        if ($cInfo->epSequence() =~ /-/) {
+            my $j;
+            ($j, $maxEp) = split('-', $cInfo->epSequence());
+        }
+
+        # search for missing non-special episodes
+        $meps = $cachedb->findMissingFilesByGroup(
+            $cInfo->animeId(),
+            $cInfo->grpId(),
+            $maxEp
+        );
+    }
+
+    if (@{$meps} > 0) {
+        print "  AniDB: WARN- Missing episode",
+            (@{$meps} > 1 ? "s: " : ": "),
+            join(", ", getRanges(@{$meps})), "\n";
+    }
+}
+
+sub getRanges {
+    my @d = @_;
+    my @r;
+    my $b = 0;
+    my $i = 1;
+    for(; $i < @d; ++$i) {
+        if ($d[$b] + ($i - $b) != $d[$i]) {
+            if ($i - $b > 2) {
+                push(@r, sprintf("%d-%d", $d[$b], $d[$i-1]));
+                $b = $i;
+            } else {
+                while ($i != $b) {
+                    push(@r, $d[$b++]);
+                }
+            }
+        }
+    }
+    
+    if ($i - $b > 2) {
+        push(@r, sprintf("%d-%d", $d[$b], $d[$i-1]));
+    } else {
+        while ($i != $b) {
+            push(@r, $d[$b++]);
+        }
+    }
+    return @r;
+}
+
+
+sub findByAniDB {
+    my ($cachedb, $vfile) = @_;
+
+    my $record = $anidb->findFileByED2K($vfile->ed2k(), $vfile->size());
+    if (!defined($record)) {
+        return undef;
+    }
+
+    my $fid = $cachedb->addAniDBFile($record);
+    return $cachedb->findByFid($fid);
+}
+
+sub generateStubVerify {
+    my ($fname, $vfile) = @_;
+    my $crcs = getCRC($fname);
+
+    $vfile->version("1");
+    $vfile->size(stat($fname)->[7]);
+    $vfile->crc32(join(",", @{$crcs}));
+}
+
+sub generateFakeVerify {
+    my ($fname, $vfile) = @_;
+    my $crcs = getCRC($fname);
+
+    if (@{$crcs}) {
+        print "   Check ", basename($fname), "\r";
+    }
+
+    # run jacksum and parse the hashes
+    my $line = jacksum($fname);
+    chomp($line);
+    $line =~ s/\r//g;
+    my @hashes = $line =~ /(\w+)/mg;
+
+    $vfile->version("1");
+    $vfile->size(stat($fname)->[7]);
+    $vfile->crc32($hashes[0]);
+    $vfile->md5($hashes[1]);
+    $vfile->ed2k($hashes[2]);
+
+    # if we got CRC(s) from the filename, check'em!
+    if (@{$crcs}) {
+        my $match = 0;
+        while (my $crc = pop(@{$crcs})) {
+            if ($crc eq $vfile->crc32()) {
+                $match = 1;
+                last;
+            }
+        }
+        print "   Good: ", basename($fname), "\n" if $match;
+        print "    BAD: ", basename($fname), "\n" unless $match;
+        return 0 unless $match; # none of the crcs matched
+    }
+    return 1;
+}
+
+sub jacksum {
+    my ($fname) = @_;
+
+    my $line = `$jacksum -X -a crc32+md5+ed2k -F "#CHECKSUM{0},#CHECKSUM{1},#CHECKSUM{2}" "$fname"`;
+    return $line;
+}
+
+sub getCRC {
+    my ($s) = @_;
+    $s =~ tr/a-f/A-F/;
+    $s =~ s/[^A-F0-9]/ /g;
+    my @p = $s =~ /(\w\w\w\w\w\w\w\w)/mg;
+    return \@p;
+}
+
+sub scanBatch {
+    foreach (@_) {
+        if ($bailout) {
+            print "   USER: interrupt signaled, exiting\n";
+            return;
+        }
+        if ( -d $_ ) {
+            scanDirectoryCompleteness($_);
+        }
+    }
+}
+
+sub scanDirectoryCompleteness {
+    my ($path) = @_;
+    my $displayPath = basename($path);
+    my @files = getMediaFiles($path);
+    if (@files eq 0) {
+        return;
+    }
+    my $fileInfo = fetchAnimeRecords($path, @files);
+    my @warns = sort { $a->{'name'} cmp $b->{'name'} }
+                    grep { defined($_->{'warn'}) } @{$fileInfo};
+
+    if (scalar @warns eq scalar @{$fileInfo}) {
+        printf("% 3s %s\n% 6s %s\n\n", "✖", $displayPath, "✆", "all lookups failed");
+        return;
+    }
+
+    my %epMap = map { $_->{'record'}->epSequence()+0 => $_->{'record'} }
+                    grep { defined($_->{'record'}) } @{$fileInfo} ;
+    my @eps = sort {$a <=> $b} map { expandRange($_) } grep { $_ > 0 } keys(%epMap);
+
+    if (@eps eq 0) {
+        printf("% 3s %s\n% 6s %s\n\n", "✖", $displayPath, "", "no episodes found");
+        return;
+    }
+
+#print "eps = ", Dumper($fileInfo), "\n";
+    my $epMax = $epMap{$eps[0]}->animeEpTotal();
+    if (!defined($epMax)) {
+        $epMax = $eps[-1];
+    }
+    my @miaEps = missingEpisodes($epMax, @eps);
+    my $status;
+    if (@miaEps > 0) {
+        $status="↺";
+    } else {
+        $status="✔";
+    }
+
+    if (@warns > 0) {
+        printf("% 3s (%d ✆) %s\n", $status, scalar @warns, $displayPath);
+    } else {
+        printf("% 3s %s\n", $status, $displayPath);
+    }
+    if (@miaEps > 0) {
+        printf("% 6s %s: %s\n", "➤", "missing", fmtRange(@miaEps));
+    }
+    foreach (@warns) {
+        printf("% 6s %s: %s\n", "✆", $_->{'warn'}, $_->{'name'});
+    }
+    if (@warns > 0 || @miaEps > 0) {
+        print "\n";
+    }
+}
+
+
+sub fmtRange {
+    push @_, -1;    # causes real last element to be displayed
+    my (@range, @result) = (shift @_);
+    return map { $_ ne push(@range, $_)-1 + $range[0]
+                     ? join("-", (@result=@range)+(@range=($_))-1 > 2 ? @result[0,-2] : @result[0])
+                     : ()
+               } @_;
+}
+
+sub missingEpisodes {
+    my ($max, @eps) = @_;
+    return grep { $eps[0] eq $_ ? (shift @eps ? 0 : 0) : 1 } 1..$max;
+}
+
+sub expandRange {
+    my ($range) = @_;
+    my @p = split(/-/, $range);
+    if (@p > 1) {
+#        print "eps = " . 0+$p[0]..0+$p[1], "\n";
+        return 0+$p[0]..0+$p[1];
+    } else {
+#        print "eps = " . 0+$p[0], "\n";
+        return 0+$p[0];
+    }
+}
+
+sub fetchAnimeRecords {
+    my ($path, @files) = @_;
+    my $cachedb = CacheDB->new($opt->{"database-file"});
+    my @result = ();
+    foreach my $name (@files) {
+        my $fname = File::Spec->catfile($path, $name);
+        my $vfile = getVerifyInfo($fname);
+        my $record = undef;
+
+        if (defined($vfile->md5())) {
+            $record = $cachedb->findByMD5($vfile->md5());
+        } else {
+            # ok, no .ver file -- are we lucky?
+            foreach my $crc (split(/,/, $vfile->crc32())) {
+                $record = $cachedb->findByCRC32($crc, $vfile->size());
+                last if defined($record);
+            }
+
+            # damn, try a full hash
+            if (!defined($record)) {
+                generateFakeVerify($fname, $vfile);
+                $record = $cachedb->findByMD5($vfile->md5());
+            }
+        }
+    
+        if (defined($record)) {
+            push @result, { name => $name, fname => $fname, record => $record };
+        } else {
+            push @result, { name => $name, fname => $fname,
+                            warn => "lookup failed" };
+        }
+    }
+    return \@result;
+}
+
+sub getVerifyInfo {
+    my ($fname) = @_;
+    my $vfile = VerifyFile->new();
+
+    if ( -f "${fname}.ver" ) {
+        $vfile->load("${fname}.ver");
+    } else {
+        generateStubVerify($fname, $vfile);
+    }
+    return $vfile;
+}
+
+sub getMediaFiles {
+    my ($path) = @_;
+    opendir( my($dir), $path) or return ();
+    my @result = sort grep { !/\.ver|\.par2|\.+$/i } readdir $dir;
+    closedir($dir);
+    return @result;
+}
+
+sub cmdOrganize {
+    parseCLIArgs();
+    mkdir $stageDir if (! -d $stageDir);
+    mkdir $completeDir if (! -d $completeDir);
+
+    anidbSetup();
+    if (@ARGV > 0) {
+        processBatch(@ARGV);
+    }
+}
+
+sub cmdScanCompleteness {
+    parseCLIArgs();
+    anidbSetup();
+    if (@ARGV > 0) {
+        scanBatch(@ARGV);
+    }
+}
+
+sub cmdServerMode {
+    parseCLIArgs();
+    print "do something\n";
+}
+
+sub cmdUnknown {
+    usage(1);
+    exit(1);
+}
+
+my $commands = {
+      organize => \&cmdOrganize
+    , scan => \&cmdScanCompleteness
+    , server => \&cmdServerMode
+    , "no command" => \&cmdUnknown
+};
+
+# get command to perform
+my $task = shift @ARGV || "no command";
+
+# modify args to include user override defaults
+unshift @ARGV, "@" . File::Spec->catfile( File::HomeDir->my_home, ".filedirector", "config");
+
+if (!defined($commands->{$task})) {
+    unshift @ARGV, $task;
+    $task = "organize";
+}
+$commands->{$task}();
+
+if (defined($anidb)) {
+    $anidb->logout();
+}
