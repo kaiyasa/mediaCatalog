@@ -1,0 +1,2 @@
+#!/bin/bash
+java -jar $(dirname $0)/../../jacksum-1.7.0/jacksum.jar "$@"
