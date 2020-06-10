@@ -1,0 +1,10 @@
+#!/bin/bash
+
+source="$1"
+shift
+
+for name in "$@"; do
+    if [ -f "$source/$name" -a -f "$name" ]; then
+        touch -r "$source/$name" "$name"
+    fi
+done
