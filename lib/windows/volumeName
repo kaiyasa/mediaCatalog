@@ -1,0 +1,6 @@
+#!/bin/bash
+
+function volumeName() {
+    noCR runCmd vol $1 | grep 'in drive . is ' | cut -c23-
+}
+
