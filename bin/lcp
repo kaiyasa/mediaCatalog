@@ -1,0 +1,44 @@
+#!/bin/bash
+
+function noCR() {
+    "$@" | tr --delete '\r'
+}
+
+function uc() {
+    tr '[:lower:]' '[:upper:]' <<<"$1"
+}
+
+function msCmd() {
+    cmd //C "$@"
+}
+
+function volumeName() {
+    noCR msCmd vol $1 | grep 'in drive . is ' | cut -c23-
+}
+
+function copy() {
+    local rc=0
+    local label=$(volumeName $1)
+
+    echo "Copying $label"
+    mkdir "$label" && {
+        cp -rp "$1"/ "$label"/; rc=$?
+        chmod -R u+w "$label"/
+        echo -e "\aFinished drive $1 $label"
+        return $rc
+    }
+}
+
+#
+# usage: lcp <list of bare drive letters>
+#  example:  lcp d
+#
+
+logDir=logs
+[ -d "$logDir" ] || mkdir "$logDir"
+for drive in "$@"; do
+    logFile="$logDir/${drive}.copy"
+    copy $(uc "$drive":) | tee "$logFile" &
+done
+
+wait
