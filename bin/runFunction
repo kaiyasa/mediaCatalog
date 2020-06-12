@@ -5,7 +5,7 @@ declare -A prog=( [path]=$(dirname "$0") [name]=$(basename "$0") )
 
 # load script library functions
 for name in ${prog[path]}/../lib/*; do
-    if [ -x "$name" ]; then
+    if [ -f "$name" -a -x "$name" ]; then
         source "$name" || exit $?
     fi
 done
