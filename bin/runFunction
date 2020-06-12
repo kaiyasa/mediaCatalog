@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# prepare script name  and base path
+declare -A prog=( [path]=$(dirname "$0") [name]=$(basename "$0") )
+
+# load script library functions
+for name in ${prog[path]}/../lib/*; do
+    if [ -x "$name" ]; then
+        source "$name" || exit $?
+    fi
+done
+
+# likely overwritten by importing programs but present for standalone mode
+function main() {
+
+    usage+=( [version]="1.0" [description]="execute shell code in the context of the library system loaded" )
+
+    test $# -eq 0 && usage
+    "$@"
+}
+
+# if invoked as a standalone program then do actual work
+if [ "${prog[name]}" = "runFunction" ]; then
+    function runFunctionUsage() {
+        cat <<EndOfFragment
+  ${prog[name]} [arg ...]
+EndOfFragment
+        exit 0
+    }
+
+    main "$@"
+fi
