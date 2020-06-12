@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# load platform specific functions
+
+case $(uname -o) in
+    Msys)
+        for name in ${prog[lib]}/msys/*; do
+            if [ -f "$name" -a -x "$name" ]; then
+                source "$name" || exit $?
+        fi
+	   done
+    ;;
+    esac

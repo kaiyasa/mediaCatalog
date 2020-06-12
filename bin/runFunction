@@ -2,9 +2,10 @@
 
 # prepare script name  and base path
 declare -A prog=( [path]=$(dirname "$0") [name]=$(basename "$0") )
+prog+=( [lib]="${prog[path]}/../lib" )
 
 # load script library functions
-for name in ${prog[path]}/../lib/*; do
+for name in ${prog[lib]}/*; do
     if [ -f "$name" -a -x "$name" ]; then
         source "$name" || exit $?
     fi
