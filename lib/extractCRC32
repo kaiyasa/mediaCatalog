@@ -1,0 +1,9 @@
+#!/bin/bash
+
+function extractCRC32() {
+    echo "$1" | sed 's/.*[[(]\(........\)[])].*/\1/'
+}
+
+
+
+
