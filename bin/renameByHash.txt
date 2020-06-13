@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# array to hold hash to file name mappings
+declare -A hashes=()
+
+function loadSummaryFile() {
+    if [ ! -f .summary ]; then
+        echo "no .summary file"
+        exit 1
+    fi
+
+    local line
+    while read line; do
+        local hash=${line:0:32} name="${line:34}"
+        hashes+=( [$hash]="$name" )
+    done < .summary
+}
+
+function main() {
+    loadSummaryFile
+
+    local name newName
+    local miss=0 hit=0 total=0
+    for name in *; do
+        test ! -f "$name" && continue
+
+        ((++total))
+        read hash junk < <(md5sum "$name")
+
+    newName="${hashes[$hash]}"
+        if [ -n "$newName" -a "$name" != "$newName" ]; then
+            ((++hit))
+            echo "moved $hit files"
+            mv -i "$name" "$newName"
+        else
+            test "$name" = "$newName" && continue
+            echo "MISSED: $name"
+            ((++miss))
+        fi
+    done    
+
+    echo 
+    echo "$hit hits, $miss misses out of $total files"
+}
+
+main "$@"
