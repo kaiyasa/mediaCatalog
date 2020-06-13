@@ -1,0 +1,22 @@
+#!/bin/bash
+
+#
+# simple script to infer path for par2 data
+##
+#  usage: repairDirectory <path to base of disk par2 data>
+#
+function path() {
+    local prefix="${1:-$(pwd)}"
+    local path=""
+
+    while [ ! -f "$prefix/.volume" ]; do
+        path="$(basename "$prefix")/$path"
+    prefix=$(dirname "$prefix")
+    done
+    echo "$(basename "$prefix")/$path"
+}
+prefix="$1"
+source="$2"
+
+par2repair -q -B. "$(cygpath -w "$prefix/$(path)/repairdb.par2")" *
+#fixTimestamps "$source/$(cut -d/ -f2- <<<"$(path)")" *

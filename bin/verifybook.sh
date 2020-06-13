@@ -20,7 +20,7 @@ for dir in "$@"; do
         mv "$tempFile" "$logFile"
     fi
     if [ -f "$logFile" ]; then
-        errs="$(egrep 'WARNING:|MISSING:|MISMATCH:' "$logFile")" && echo "Errors in $dir: $errs"
+        errs="$(egrep -a 'WARNING:|MISSING:|MISMATCH:' "$logFile")" && echo "Errors in $dir: $errs"
     fi
 done
 echo "finished"
