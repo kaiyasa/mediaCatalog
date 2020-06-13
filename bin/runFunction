@@ -17,7 +17,7 @@ function main() {
     usage+=( [version]="1.0" [description]="execute shell code in the context of the library system loaded" )
 
     test $# -eq 0 && usage
-    "$@"
+    eval "$@"
 }
 
 # if invoked as a standalone program then do actual work
