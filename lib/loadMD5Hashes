@@ -1,0 +1,25 @@
+#!/bin/bash
+
+#
+# loadMD5Hashes [md5ChecksumFile [[ooutbound  hashes array name] [outbound names array name]]]
+#
+#  using names of variables, process and load a hash map and indexed array of information
+#
+function loadMD5Hashes() {
+    local hashFile="${1:-.summary}"
+
+    if [ ! -f "$hashFile" ]; then
+        return 1
+    fi
+
+
+
+    local outHashes=${2:-hashes} outNames=${3:-names}
+
+    local line
+    while read line; do
+        local hash=${line:0:32} name="${line:34}"
+        hashes+=( [$hash]="$name" )
+        names+=( "$name" )
+    done < "$hashFile"
+}
