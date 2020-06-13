@@ -28,22 +28,21 @@ function main() {
     }
 
     local -a unmatchedNames
-    read -a unmatchedNames < <(findUnmatchedFiles < <(generateFileLists "$dir"/.summary "$dir"))
-
+    read -d '\n' -a unmatchedNames < <(findUnmatchedFiles < <(generateFileLists "$dir"/.summary "$dir"))
 
     local name newName
     local miss=0 hit=0 total=0
     for name in "${unmatchedNames[@]}"; do
-        test ! -f "$name" && continue
+        test ! -f "$dir/$name" && continue
 
         ((++total))
-        read hash junk < <(md5sum $dir/"$name")
+        read hash junk < <(md5sum "$dir/$name")
 
     newName="${hashes[$hash]}"
         if [ -n "$newName" -a "$name" != "$newName" ]; then
             ((++hit))
             echo "moved $hit files"
-            : mv -i "$dir/$name" "$dir/$newName"
+            mv -i "$dir/$name" "$dir/$newName"
         else
             echo "MISSED: $name"
             ((++miss))
@@ -55,9 +54,14 @@ function main() {
 }
 
 function generateFileLists() {
-    cat <(cut -c35- .summary | uniq) \
-        <(find . -maxdepth 1 -type f -exec basename '{}' \;) \
-        <(echo .summary; echo .summary; echo .vcatalog; echo .vcatalog)
+    local name hashFile="$1" dir="$2"
+
+    cat <(cut -c35- "$hashFile" | uniq) \
+        <(find "$dir" -maxdepth 1 -type f -exec basename '{}' \;) \
+        <(echo .summary; echo .summary; echo .vcatalog; echo .vcatalog) | \
+      while read name; do
+        [ -f "$dir/$name" ] && echo "$name"
+      done
 }
 
 function findUnmatchedFiles() {
