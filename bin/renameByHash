@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# load bootstrap code
+source $(dirname "$0")/runFunction
+
+
 # array to hold hash to file name mappings
 declare -A hashes=()
 
@@ -17,6 +21,8 @@ function loadSummaryFile() {
 }
 
 function main() {
+    test $# -eq 0 && usage
+
     loadSummaryFile
 
     local name newName
@@ -41,6 +47,16 @@ function main() {
 
     echo 
     echo "$hit hits, $miss misses out of $total files"
+}
+
+
+# usage hook for detailed descriptions
+usage+=( [version]="1.0" [description]="fix mangled filenames using catalog information" )
+function renameByHashUsage(){
+    cat <<EndOfFragment
+  ${prog[name]} [directory]
+EndOfFragment
+    exit 0
 }
 
 main "$@"
