@@ -33,7 +33,7 @@ function main() {
         test ! -f "$dir/$name" && continue
 
         ((++total))
-        read hash junk < <(md5sum "$dir/$name")
+        read hash junk < <(md5sum "$dir/$name" | UC)
 
     newName="${hashes[$hash]}"
         if [ -n "$newName" -a "$name" != "$newName" ]; then
@@ -46,8 +46,7 @@ function main() {
         fi
     done    
 
-    echo 
-    echo "$hit hits, $miss misses out of $total files"
+    [ $total -gt 0 ] && echo -e "\n$hit hits, $miss misses out of $total files"
     test "$hit" -eq 0
 }
 
@@ -97,7 +96,7 @@ function loadVCHashes() {
 
     while read record; do
         vcLineToArray "$record"
-        hashes+=( [${vc[MD5]}]="${vc[name]}" )
+        hashes+=( [$(UC ${vc[MD5]} )]="${vc[name]}" )
         names+=( "${vc[name]}" )
     done < "$vcPath"
 }
