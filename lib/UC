@@ -1,0 +1,12 @@
+#!/bin/bash
+
+function UC() {
+    local cmd="tr '[:lower:]' '[:upper:]'"
+
+    if [ $# -gt 0 ]; then
+        $cmd < <(echo "$@")
+    else
+        $cmd
+    fi
+}
+
