@@ -28,11 +28,12 @@ function main() {
     }
 
     local -a unmatchedNames
-    read -d '\n' -a unmatchedNames < <(findUnmatchedFiles < <(generateFileLists "$dir"/.summary "$dir"))
+    loadArray < <(findUnmatchedFiles < <(generateFileLists "$dir"/.summary "$dir"))
 
     local name newName
     local miss=0 hit=0 total=0
     for name in "${unmatchedNames[@]}"; do
+#echo "Working on $name"
         test ! -f "$dir/$name" && continue
 
         ((++total))
@@ -51,6 +52,13 @@ function main() {
 
     echo 
     echo "$hit hits, $miss misses out of $total files"
+    test "$hit" -eq 0
+}
+
+function loadArray() {
+    while read line; do
+     unmatchedNames+=("$line")
+    done
 }
 
 function generateFileLists() {
