@@ -1,0 +1,14 @@
+#!/bin/bash
+
+declare -A vc
+
+function vcLineToArray() {
+    local version timeStamp fields size name
+
+    IFS='|' read version timeStamp fields size name <<<"$1"
+
+    vc=( [version]="${version:2}" [timeStamp]="$timeStamp" [size]=$size [name]="$name")    
+    local map=$( sed -e 's/\([^ =]\+\)=\([^ ]\+\)/[\1]=\2/g' <<<"$fields" )
+    eval "vc+=( $map )"
+}
+
