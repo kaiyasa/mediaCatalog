@@ -21,11 +21,7 @@ function main() {
         exit 1
     fi
 
-
-    loadMD5Hashes  "$dir/.summary" || {
-        echo "'No catalog files present"
-        exit 1
-    }
+    loadHashes "$dir"
 
     local -a unmatchedNames
     loadArray < <(findUnmatchedFiles < <(generateFileLists "$dir"/.summary "$dir"))
@@ -55,6 +51,16 @@ function main() {
     test "$hit" -eq 0
 }
 
+function loadHashes() {
+    local dir="${1:-.}"
+
+    loadVCHashes "$dir/.vcatalog" && return 0
+    loadMD5Hashes "$dir/.summary" && return 0
+
+    echo "No catalog is present"
+    exit 90
+}
+
 function loadArray() {
     while read line; do
      unmatchedNames+=("$line")
@@ -64,7 +70,7 @@ function loadArray() {
 function generateFileLists() {
     local name hashFile="$1" dir="$2"
 
-    cat <(cut -c35- "$hashFile" | uniq) \
+    cat <(printCatalogFiles) \
         <(find "$dir" -maxdepth 1 -type f -exec basename '{}' \;) \
         <(echo .summary; echo .summary; echo .vcatalog; echo .vcatalog) | \
       while read name; do
@@ -72,8 +78,28 @@ function generateFileLists() {
       done
 }
 
+function printCatalogFiles() {
+    local name
+
+    for name in "${hashes[@]}"; do
+        echo "$name"
+    done
+}
+
 function findUnmatchedFiles() {
     sort | uniq -u
+}
+
+function loadVCHashes() {
+    local vcPath="${1:-.vcatalog}"
+
+    [ -f "$vcPath" ] || return 1
+
+    while read record; do
+        vcLineToArray "$record"
+        hashes+=( [${vc[MD5]}]="${vc[name]}" )
+        names+=( "${vc[name]}" )
+    done < "$vcPath"
 }
 
 
