@@ -1,5 +1,5 @@
 #!/bin/bash
 
 function hashToMD5_16k() {
-    dd if="$1" bs=16k count=1 2> /dev/null | md5sum - | cut -c1-32 | UC
+	    hashTo "$1" MD5_16k
 }

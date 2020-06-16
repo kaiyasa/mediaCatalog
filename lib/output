@@ -1,0 +1,14 @@
+#!/bin/bash
+
+#
+# simple routine to ensure a carriage return is printed before any other program's output
+#
+function output() {
+    local line
+
+    hasOutput=false
+    "$@$" | while read line; do
+        $hasOutput || echo
+        echo "$line"
+    done
+}

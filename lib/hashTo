@@ -1,0 +1,45 @@
+#!/bin/bash
+
+#
+# hashTo filePath hashName [hashName ...]
+#
+function hashTo() {
+    [ $# -eq 1 ] && set -- "$1" ${default_hashes:-CRC32 MD5 ed2k MD5_16k}
+    [ $# -lt 2 ] && { echo "wrong number of arguments"; return 1; }
+    local name="$1"; shift
+    [ -f "$name" ] || { echo "No such file: $name"; return 1; }
+
+    local -A map=( [MD5]='%M' [CRC32]='%C' [ed2k]='%E' [MD5_16k]='%M' )
+    local tuple=false; [ $# -gt 1 ] && tuple=true
+    local kvFormat="[%s]=%s"
+    local -a format=()
+
+    # build rhash's format string for either single or multiple hashes
+    while [ $# -gt 0 ]; do
+        # handle MD5_16k special case by doing the hash and embedding it into the format
+        [ "$1" = 'MD5_16k' ] && {
+            map+=( [$1]=$(_hashToMD5_16k) ) || { echo "${map[MD5_16k]}"; return 1; }
+        }
+
+        local item="${map[$1]}"
+        [ -z "$item" ] && { echo "unmapped hash name: $1"; return 1; }
+        if $tuple ; then
+            format+=( $(printf "$kvFormat" "$1" "$item") )
+        else
+            format+=( "$item" )
+        fi
+        shift
+    done
+
+    # shortcut hashing just for MD5_16k
+    if [ $tuple = false -a "${map[MD5]}" != "${map[MD5_16k]}" ]; then
+        echo "${map[MD5_16k]}"
+        return 0
+    fi
+    rhash --printf "$(echo "${format[@]}")" "$name"
+}
+
+function _hashToMD5_16k() {
+    [ -f "$name" ] || { echo "No such file: $name"; return 1; }
+    rhash --printf "${map[MD5_16k]}" - < <(dd if="$name" bs=16k count=1 2> /dev/null)
+}
