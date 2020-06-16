@@ -42,7 +42,7 @@ check() {
     if [ "$flag" = '1' ]; then
         h=$(jacksum -X -a crc32+md5+ed2k -F "CRC32=#CHECKSUM{0} MD5=#CHECKSUM{1} ed2k=#CHECKSUM{2}" <(cat "$fn".[0-9][0-9]))
     else
-        h=$(jacksum -X -a crc32+md5+ed2k -F "CRC32=#CHECKSUM{0} MD5=#CHECKSUM{1} ed2k=#CHECKSUM{2}" "$fn")
+        h=$(rhash --printf 'CRC32=%C MD5=%M ed2k=%E' "$fn") || { echo "rhash failure" 1>&2; }
     fi
     [ "$md5" = "$(getmd5 $h)" ]
 }
