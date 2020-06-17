@@ -141,7 +141,10 @@ function loadVCHashes() {
 usage+=( [version]="1.0" [description]="fix mangled filenames using catalog information" )
 function renameByHashUsage(){
     cat <<EndOfFragment
-  ${prog[name]} [directory]
+  ${prog[name]} [-r] [directory]
+
+    Options:
+      -r  Recurse directories and processs any with catalog information present
 EndOfFragment
     exit 0
 }
