@@ -9,17 +9,56 @@ declare -A hashes=()
 declare -a names=()
 
 function main() {
-    # validate our arguments or process help
-    case "$1" in
-      '-h' | '--help' | '-?') usage;;
-      '--') shift;;
-    esac
+    local renameTree=false
 
+    # process options
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        '-h' | '--help' | '-?') usage;;
+        '-r') renameTree=true;;
+        '--') shift; break;;
+        *) break;;
+        esac
+        shift
+    done
+
+
+    local miss=0 hit=0 total=0
     local dir="${1:-.}"
+
     if [ -n "$dir" -a ! -d "$dir" ]; then
         echo "Error: expecting a directory as an argument -- $dir"
         exit 1
     fi
+
+    if $renameTree ;then
+        renameEntireTree "$dir"
+    else
+        renameByHash "$dir"
+    fi
+
+    # output statistics if notable
+    if [ $total -gt 0 ]; then
+        echo -e "\n$hit hits, $miss misses out of $total files"
+    fi
+
+    # set return code to signal if any modifications occurred
+    test "$hit" -eq 0
+
+}
+
+function renameEntireTree() {
+    local  rootDir="$1"
+
+    while read dir; do
+        if [ -f "$dir"/.summary -o -f "$dir"/.vcatalog ]; then
+            renameByHash "$dir"
+        fi
+    done < <( find "$rootDir" -type d )
+}
+
+function renameByHash() {
+    local dir="$1"
 
     loadHashes "$dir"
 
@@ -27,7 +66,6 @@ function main() {
     loadArray < <(findUnmatchedFiles < <(generateFileLists "$dir"/.summary "$dir"))
 
     local name newName
-    local miss=0 hit=0 total=0
     for name in "${unmatchedNames[@]}"; do
 #echo "Working on $name"
         test ! -f "$dir/$name" && continue
@@ -45,9 +83,6 @@ function main() {
             ((++miss))
         fi
     done    
-
-    [ $total -gt 0 ] && echo -e "\n$hit hits, $miss misses out of $total files"
-    test "$hit" -eq 0
 }
 
 function loadHashes() {
@@ -56,7 +91,7 @@ function loadHashes() {
     loadVCHashes "$dir/.vcatalog" && return 0
     loadMD5Hashes "$dir/.summary" && return 0
 
-    echo "No catalog is present"
+    echo "No catalog is present -- $dir"
     exit 90
 }
 
