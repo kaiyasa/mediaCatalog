@@ -18,7 +18,7 @@ function loadMD5Hashes() {
 
     local line
     while read line; do
-        local hash=${line:0:32} name="${line:34}"
+        local hash=$(UC ${line:0:32}) name="${line:34}"
         hashes+=( [$hash]="$name" )
         names+=( "$name" )
     done < "$hashFile"
