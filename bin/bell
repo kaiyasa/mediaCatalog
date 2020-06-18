@@ -1,0 +1,20 @@
+#!/bin/bash
+
+[ $# -eq 0 ] && {
+    echo "bell [ -l | -a logFile] command args..."
+    echo "   where - overwrites the logFile and -a appends to it"
+    exit 0
+}
+# log if requested
+if [ "$1" = '-l' -o "$1" = '-a' ]; then
+    cmd="tee $(test $1 = -a && echo -- -a) $2"
+    shift 2
+    "$@" 2>&1 | $cmd
+    rc=$?
+else
+"$@"
+rc=$?
+fi
+
+echo -ne '\a'
+exit $rc
