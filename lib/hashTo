@@ -36,7 +36,7 @@ function hashTo() {
         echo "${map[MD5_16k]}"
         return 0
     fi
-    rhash --printf "$(echo "${format[@]}")" "$name"
+    rhash --printf "$(echo "${format[@]}")" - < "$name"
 }
 
 function _hashToMD5_16k() {
