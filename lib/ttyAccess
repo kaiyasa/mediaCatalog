@@ -1,0 +1,6 @@
+#!/bin/bash
+
+function ttyAccess() {
+    "$@" < /dev/tty > /dev/tty 2>&1
+}
+
