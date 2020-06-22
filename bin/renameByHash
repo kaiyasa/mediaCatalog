@@ -77,7 +77,7 @@ function renameByHash() {
         if [ -n "$newName" -a "$name" != "$newName" ]; then
             ((++hit))
             echo "moved $hit files"
-            mv -i "$dir/$name" "$dir/$newName"
+            ttyAccess mv -i "$dir/$name" "$dir/$newName"
         else
             echo "MISSED: $name"
             ((++miss))
