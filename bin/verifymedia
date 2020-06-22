@@ -38,6 +38,11 @@ check() {
     local md5=$2
     local fn=$3
 
+    # override split flag if it appears the file is assembled
+    if [ "$flag" = '1' -a -f "$fn" ]; then
+        flag=0
+    fi
+
     local h
     if [ "$flag" = '1' ]; then
         h=$(jacksum -X -a crc32+md5+ed2k -F "CRC32=#CHECKSUM{0} MD5=#CHECKSUM{1} ed2k=#CHECKSUM{2}" <(cat "$fn".[0-9][0-9]))
@@ -103,7 +108,7 @@ verify_vcatalog() {
         local splitFlag=$(getKeyValue split "$hashes")
         local tfn="$fn"
 
-        if [ "$splitFlag" = '1' ]; then
+        if [ "$splitFlag" = '1' -a ! -f "$base/$fn" ]; then
             tfn="$fn.00"
         fi
 
