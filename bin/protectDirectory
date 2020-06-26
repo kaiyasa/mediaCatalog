@@ -12,6 +12,8 @@ for name in ${prog[lib]}/*; do
 done
 
 
+parPath=parity
+
 declare -a files=()
 
 function  findFiles() {
@@ -24,10 +26,10 @@ function  findFiles() {
 }
 
 function create() {
-    mkdir parity/"$1" && (
-        cd parity/"$1" && {
+    mkdir "$parPath/$1" && (
+        cd "$parPath/$1" && {
             clear
-            echo "      Generating parity for $1"
+            echo "      Generating recovery data for $1"
             findFiles ../../"$1"
             par2create -q -R -r1 -s$((1 << 20)) -B ../../"$1" -a repairDB -- "${files[@]}"
         }
@@ -37,7 +39,7 @@ function create() {
 function main() {
     [ $# -eq 0 ] && usage
 
-    [ -d parity ] || mkdir parity
+    [ -d "$parPat"h ] || mkdir "$parPath"
     [ -d logs ] || mkdir logs
 
     local name
