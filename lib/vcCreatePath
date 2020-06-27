@@ -1,0 +1,13 @@
+#!/bin/bash
+
+#
+# args: <true or false> path
+#
+#   true   creates the directory leading to the file path
+#    false  creates the directory including subdirectories of path
+#
+function vcCreatePath() {
+    $1 && mkdir -p "$(dirname "$2")" || return $?
+    $1 || mkdir -p "$2"
+}
+
