@@ -3,6 +3,8 @@
 function vcLog() {
     [ -z "$VCDB" ] && exit 99
     local name="$VCDB/$1/${2}.log"
+
+    echo "$name"
     test -f "$name" 
 }
 

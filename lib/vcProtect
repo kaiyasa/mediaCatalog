@@ -1,0 +1,10 @@
+#!/bin/bash
+
+function vcProtect() {
+    [ -z "$VCDB" ] && exit 99
+    local name="$VCDB/$1/par2/${2}"
+
+    echo "$name"
+    test df "$name" 
+}
+
