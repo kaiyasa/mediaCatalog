@@ -1,0 +1,13 @@
+#!/bin/bash
+
+#
+# quick and dirty way to load a global config file
+#
+function loadConfig() {
+    local config="${VC_CONFIG:-$HOME/.config/mediaCatalog.config}"
+
+    [ -f "$config" ] && {
+        source "$config" || exit $?
+    }
+}
+
