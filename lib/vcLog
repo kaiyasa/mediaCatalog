@@ -1,0 +1,8 @@
+#!/bin/bash
+
+function vcLog() {
+    [ -z "$VCDB" ] && exit 99
+    local name="$VCDB/$1/${2}.log"
+    test -f "$name" 
+}
+
