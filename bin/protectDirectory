@@ -26,25 +26,61 @@ function  findFiles() {
 }
 
 function create() {
-    mkdir "$parPath/$1" && (
-        cd "$parPath/$1" && {
-            clear
-            echo "      Generating recovery data for $1"
-            findFiles ../../"$1"
-            par2create -q -R -r1 -s$((1 << 20)) -B ../../"$1" -a repairDB -- "${files[@]}"
-        }
-    )
+    local parDB="$parPath/$1"
+    local workDir="$parPath/$1-$$"
+
+    if [ "$redo" = "false" -a -d "$parDB" ]; then
+        echo "Skipping $1, already protected"
+        return 0
+    fi
+
+    if mkdir "$workDir" && pushd "$workDir" > /dev/null 2>&1 ; then
+        generate "$name"
+        popd > /dev/null 2>&1
+    fi
+
+    if $redo ; then
+        [ -d "$parDB" ] && mv "$parDB" "$parDB".old
+        mv "$workDir" "$parDB"
+        rm -rf "$parDB".old
+    else
+        mv "$workDir" "$parDB"
+    fi
+}
+
+function  generate() {
+    clear
+    echo "      Generating recovery data for $1"
+    findFiles ../../"$1"
+    par2create -q -R -r1 -s$((1 << 20)) -B ../../"$name" -a repairDB -- "${files[@]}"
 }
 
 function main() {
     [ $# -eq 0 ] && usage
 
-    [ -d "$parPat"h ] || mkdir "$parPath"
+    # process arguments
+    local redo=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            '--redo') redo=true;;
+            '--') shift; break;;
+            *) break;;
+        esac
+        shift
+    done
+
+    run "$@"
+}
+
+function run() {
+    [ -d "$parPath" ] || mkdir "$parPath"
     [ -d logs ] || mkdir logs
 
     local name
     for name in "$@"; do
-        [ -d "$name" ] && create "$name" 2>&1 | tee logs/par$(basename "$name".log)
+        local logFile=logs/par$(basename "$name".log)
+
+        [ -d "$name" ] && create "$(basename "$name")" 2>&1 | tee "$logFile"
     done
 }
 
@@ -52,9 +88,9 @@ function main() {
 usage+=( [detail]=detailedUsage [version]=1.0"" [description]="generate PAR2 recovery data for an entire  directory structure" )
  function detailedUsage() {
     cat <<EndOfFragment
-  ${prog[name]} [directoryPath ...]
+  ${prog[name]} [--redo] [directoryPath ...]
 EndOfFragment
     exit 0
 }
 
-   main "$@"
+main "$@"
